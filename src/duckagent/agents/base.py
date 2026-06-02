@@ -108,12 +108,19 @@ class BaseAgent:
         await self.bus.publish(msg)
 
     async def think(self, input_text: str, *, tools: list[dict] | None = None,
-                    tool_executor: Any = None, max_iterations: int = 50) -> str:
+                    mcp_manager: Any = None, max_iterations: int = 50) -> str:
         """Call the LLM with a fresh context each time — no cross-message accumulation.
 
         Bus messages are not LLM context. Each think() call starts from just the
         system prompt + this input. The tool calling loop extends context locally
         within a single call, but that context is discarded when think() returns.
+
+        Args:
+            input_text: The user/agent input to reason about.
+            tools: OpenAI-format tool schemas. If ``None`` and ``mcp_manager``
+                is provided, tools are fetched dynamically from MCP servers.
+            mcp_manager: ``McpClientManager`` for MCP-based async tool calls.
+            max_iterations: Max tool-calling loop iterations.
         """
         context: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
@@ -121,10 +128,15 @@ class BaseAgent:
         ]
         await self._broadcast_status("thinking", task_summary=input_text[:80])
 
+        # Resolve tools from MCP manager (lazy connect on first use)
+        _tools: list[dict] | None = tools
+        if mcp_manager is not None and _tools is None:
+            _tools = await mcp_manager.ensure_tools()
+
         for _ in range(max_iterations):
             kwargs: dict[str, Any] = {"model": self.model, "messages": context}
-            if tools:
-                kwargs["tools"] = tools
+            if _tools:
+                kwargs["tools"] = _tools
                 kwargs["tool_choice"] = "auto"
 
             response = await self._call_llm_with_retry(**kwargs)
@@ -132,32 +144,36 @@ class BaseAgent:
 
             assistant_entry: dict[str, Any] = {"role": "assistant", "content": message.content or ""}
             tool_calls = getattr(message, "tool_calls", None)
-            if tool_calls:
+            # Guard: only treat as real tool_calls if it's a non-empty list
+            # (avoids AsyncMock false-positives in tests)
+            if isinstance(tool_calls, list) and tool_calls:
                 assistant_entry["tool_calls"] = [
                     tc.model_dump() if hasattr(tc, "model_dump") else tc
                     for tc in tool_calls
                 ]
             context.append(assistant_entry)
 
-            if not tool_calls:
+            if not isinstance(tool_calls, list) or not tool_calls:
                 await self._broadcast_status("idle")
                 return message.content or ""
 
-            if not tool_executor:
-                await self._broadcast_status("idle")
-                return message.content or ""
+            if mcp_manager is not None:
+                await self._broadcast_status("tool_calling")
+                for tc in tool_calls:
+                    name = tc.function.name
+                    arguments = json.loads(tc.function.arguments)
+                    result = await mcp_manager.call_tool(name, arguments)
+                    context.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": name,
+                        "content": result,
+                    })
+                continue
 
-            await self._broadcast_status("tool_calling")
-            for tc in tool_calls:
-                name = tc.function.name
-                arguments = json.loads(tc.function.arguments)
-                result = tool_executor.execute(name, arguments)
-                context.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": name,
-                    "content": result,
-                })
+            # No tool executor available
+            await self._broadcast_status("idle")
+            return message.content or ""
 
         await self._broadcast_status("idle")
         return "Reached max iterations without final answer."

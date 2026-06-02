@@ -4,17 +4,19 @@ from pathlib import Path
 import structlog
 
 from duckagent.bus import Message
-from duckagent.tools import JadxToolExecutor, JADX_TOOLS
+from duckagent.config import settings
+from duckagent.mcp import McpClientManager, McpServerConfig
 from .base import BaseAgent
 
 logger = structlog.get_logger()
 
 
 class IdaJadxAgent(BaseAgent):
-    """Agent specialized in static analysis of decompiled APK code via JADX.
+    """Agent for both IDA Pro and JADX static analysis.
 
-    Uses JADX tools to search classes, read source code, find cross-references,
-    and analyze Android manifest/resources.
+    Connects to MCP servers named in ``DUCKAGENT_JADX_AGENT_MCP_SERVERS``
+    (default: ``"ida-pro-mcp,jadx-mcp"``).  The system prompt teaches the
+    agent when to use IDA tools vs JADX tools based on user intent.
     """
 
     def __init__(
@@ -22,8 +24,6 @@ class IdaJadxAgent(BaseAgent):
         bus,
         model: str,
         prompts_dir: Path,
-        jadx_host: str = "127.0.0.1",
-        jadx_port: int = 8650,
         verify_enabled: bool = True,
         verify_max_retries: int = 3,
     ) -> None:
@@ -43,15 +43,15 @@ class IdaJadxAgent(BaseAgent):
             verify_max_retries=verify_max_retries,
         )
 
-        self._executor = JadxToolExecutor(
-            jadx_host=jadx_host,
-            jadx_port=jadx_port,
-        )
-        self._tools = JADX_TOOLS
+        configs = settings.resolve_mcp_configs("ida_jadx_agent")
+        self._mcp_manager = McpClientManager(configs) if configs else None
+
+    async def start(self) -> None:
+        await super().start()
 
     async def stop(self) -> None:
-        if self._executor:
-            self._executor.close()
+        if self._mcp_manager:
+            await self._mcp_manager.close()
         await super().stop()
 
     async def on_message(self, msg: Message) -> None:
@@ -60,10 +60,8 @@ class IdaJadxAgent(BaseAgent):
         Only processes actionable message types (request, question).
         Being @mentioned in a conclusion/decision is just informational (CC) — no action.
         """
-        # Only request and question require action
         if msg.type not in ("request", "question"):
             return
-        # Must be addressed to us: either direct target or @mentioned
         addressed_to_us = (
             msg.to_agent == self.agent_id or
             (msg.mentions and self.agent_id in msg.mentions)
@@ -71,20 +69,16 @@ class IdaJadxAgent(BaseAgent):
         if not addressed_to_us:
             return
 
-        # Build context-aware input
         input_text = msg.content
         if msg.from_agent:
             input_text = f"[来自 {msg.from_agent}]: {input_text}"
 
         response = await self.think(
             input_text,
-            tools=self._tools,
-            tool_executor=self._executor,
+            mcp_manager=self._mcp_manager,
         )
 
         evidence = self._extract_evidence(response)
-
-        # Respond to sender (or human if it was from human)
         reply_to = msg.from_agent if msg.from_agent != "human" else "human"
 
         await self.send(
@@ -98,7 +92,6 @@ class IdaJadxAgent(BaseAgent):
 
     @staticmethod
     def _extract_evidence(text: str) -> list[str]:
-        """Extract class name and method references as evidence."""
         patterns = [
             r'(?:class|类)\s+([\w.$]+)',
             r'(?:method|方法)\s+([\w.$<>()]+)',
@@ -106,11 +99,10 @@ class IdaJadxAgent(BaseAgent):
         evidence: list[str] = []
         for pattern in patterns:
             evidence.extend(re.findall(pattern, text, re.IGNORECASE))
-        return evidence[:10]  # limit
+        return evidence[:10]
 
     @staticmethod
     def _assess_confidence(text: str) -> str:
-        """Assess confidence level based on hedging language in the response."""
         low_indicators = ["不确定", "可能", "疑似", "unclear", "might", "possibly"]
         for indicator in low_indicators:
             if indicator in text.lower():

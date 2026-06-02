@@ -4,7 +4,7 @@
 
 多 Agent 协作系统，用于 Android 逆向工程。Agent 平权——通过 @mention 互相点名，不设中心路由。
 
-当前阶段：Phase 3 — HTTP 消息总线 + 多进程 + Textual TUI。
+当前阶段：Phase 4 — MCP 工具协议 + 配置驱动 + 惰性连接。
 
 ## 技术栈
 
@@ -12,11 +12,13 @@
 - 模型调用：litellm（统一接口，切模型只改配置）
 - 消息总线：MessageBus ABC → LocalMessageBus（SQLite + asyncio.Queue）+ HttpMessageBus（HTTP + WebSocket）
 - 服务端：FastAPI + uvicorn（独立进程）
-- Trace 工具：ak_search（C daemon，mmap + 行索引）
-- JADX 工具：HTTP 直连 JADX Java Plugin（127.0.0.1:8650）
+- 工具协议：MCP（Model Context Protocol）— Agent 是纯 MCP 客户端
+- Trace 工具：MCP stdio server → ak_search（C daemon，mmap + 行索引）
+- IDA 工具：MCP Streamable HTTP → IDA Pro MCP server（127.0.0.1:13337/mcp）
+- JADX 工具：MCP stdio → jadx-mcp-server（连接 JADX-GUI 8650 端口）
 - 包管理：uv
 - CLI：typer + Textual TUI
-- 下一阶段：Unidbg Agent、重连机制、HTTP 双向 WebSocket 优化
+- 下一阶段：Unidbg Agent、更完善的 prompt 和分析方法
 
 ## 架构
 
@@ -29,6 +31,20 @@
 进程: ida-agent   ──┘
 进程: tui         ──── WS /ws?role=observer (看全部) + HTTP POST (发消息)
 ```
+
+### MCP 工具连接（Agent 是纯客户端）
+
+```
+ida_jadx_agent (MCP client)
+    ├─ ida-pro-mcp (Streamable HTTP)  → IDA Pro（用户手动管理）
+    └─ jadx-mcp (stdio subprocess)    → JADX-GUI（用户手动管理）
+
+trace_agent (MCP client)
+    └─ trace (stdio subprocess)       → 内置 trace MCP server (ak_search)
+```
+
+Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调工具时才连。
+连不上不崩溃，返回 error 给 LLM，LLM 自行适应。
 
 ### 单进程模式（`duck run`，向后兼容）
 
@@ -45,7 +61,7 @@
 │              ▼            │            ▼                         │
 │  ┌──────────────┐  ┌──────────┐  ┌───────────────┐              │
 │  │ TraceAgent   │  │MainAgent │  │ IdaJadxAgent  │              │
-│  │ (ak_search)  │  │ (纯推理) │  │ (JADX HTTP)   │              │
+│  │ (trace MCP)  │  │ (纯推理) │  │ (IDA+JADX MCP)│              │
 │  └──────┬───────┘  └────┬─────┘  └───────┬───────┘              │
 │         │               │                │                       │
 │         └───────────────┼────────────────┘                       │
@@ -58,18 +74,71 @@
 
 ### 角色
 
-| 角色 | agent_id | 职责 | 工具 |
-|------|----------|------|------|
+| 角色 | agent_id | 职责 | MCP Servers |
+|------|----------|------|-------------|
 | MainAgent | main_agent | 协调、拆解任务、综合结论 | 无（纯推理） |
-| TraceAgent | trace_agent | 执行流分析、算法还原 | trace_search/trace_context/trace_cross_ref |
-| IdaJadxAgent | ida_jadx_agent | 静态代码分析、类/方法搜索 | jadx_search_classes_by_keyword/get_class_source/xrefs 等 11 个 |
+| TraceAgent | trace_agent | 执行流分析、算法还原 | trace（内置 stdio） |
+| IdaJadxAgent | ida_jadx_agent | 静态分析、反汇编、反编译 | ida-pro-mcp + jadx-mcp |
 | 人（Leader） | human | 终审、路径决策 | Textual TUI |
 
 ### 未来角色
 
 | 角色 | 职责 | 工具 |
 |------|------|------|
-| Unidbg | 补环境、模拟执行、验证 | unidbg Java API |
+| Unidbg | 补环境、模拟执行、验证 | unidbg Java API (MCP) |
+
+## MCP 工具系统
+
+### 设计原则
+
+- Agent 是**纯 MCP 客户端**——不启动/停止 server 进程
+- 连接**惰性**——第一次 `think()` 调工具时才触发连接
+- 连不上**优雅降级**——返回 error JSON 给 LLM，不阻塞 agent
+- 工具 description 自动加 `[server名]` 前缀——LLM 一眼看出来源
+- 工具失败**隔离**——IDA 挂了不影响 JADX，反之亦然
+
+### MCP Server 配置
+
+读取 `~/.claude/.mcp.json`（Claude Code 兼容格式）：
+
+```json
+{
+    "mcpServers": {
+        "ida-pro-mcp": {
+            "type": "http",
+            "url": "http://127.0.0.1:13337/mcp"
+        },
+        "jadx-mcp": {
+            "command": "uv",
+            "args": ["run", "/path/to/jadx_mcp_server.py"]
+        }
+    }
+}
+```
+
+支持两种传输：
+- **stdio**：subprocess 子进程（stderr 输出被吞到 /dev/null）
+- **http**：Streamable HTTP（连接外部 MCP server）
+
+### Agent ↔ MCP Server 映射
+
+通过环境变量配置哪个 agent 连哪些 server：
+
+```bash
+DUCKAGENT_TRACE_AGENT_MCP_SERVERS=trace              # 内置
+DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp  # 从 .mcp.json 读
+DUCKAGENT_MAIN_AGENT_MCP_SERVERS=                    # 纯推理，无工具
+```
+
+### 添加新 MCP server
+
+零代码——在 `~/.claude/.mcp.json` 加一条 + 配环境变量：
+
+```bash
+# 例：给 ida_jadx_agent 加一个 frida MCP server
+# 1. 在 .mcp.json 的 mcpServers 里加 "frida": {...}
+# 2. 设置 DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp,frida
+```
 
 ## TUI
 
@@ -212,18 +281,25 @@ src/duckagent/
 │   ├── db.py              # SQLite 持久层
 │   └── dispatcher.py      # 纯函数路由逻辑
 ├── agents/
-│   ├── base.py            # BaseAgent: 生命周期、think()、send()、@mention 解析
+│   ├── base.py            # BaseAgent: 生命周期、think()、MCP tool calling
 │   ├── main_agent.py      # MainAgent: @mention 路由、JSON 清理
-│   ├── trace_agent.py     # TraceAgent: tool calling 分析 trace
-│   └── ida_jadx_agent.py  # IdaJadxAgent: JADX 静态分析
+│   ├── trace_agent.py     # TraceAgent: MCP 连接 trace server
+│   └── ida_jadx_agent.py  # IdaJadxAgent: MCP 连接 IDA + JADX
+├── mcp/
+│   ├── __init__.py        # 包导出
+│   ├── schema_converter.py  # MCP Tool → OpenAI function-calling 格式
+│   ├── client_manager.py  # McpClientManager: 连接管理、路由、惰性连接
+│   └── servers/
+│       ├── trace_server.py  # 内置 trace MCP server (FastMCP + ak_search)
+│       └── jadx_server.py   # 内置 JADX MCP server wrapper (FastMCP)
+├── tools/
+│   ├── protocol.py        # ToolExecutor protocol (legacy)
+│   ├── schemas.py         # trace + JADX tool schemas (legacy)
+│   ├── trace_executor.py  # LocalTraceToolExecutor (被 trace MCP server 复用)
+│   └── jadx_executor.py   # JadxToolExecutor (被 jadx MCP server 复用)
 ├── processes/
 │   ├── agent_process.py   # Agent 进程入口（工厂 + 信号处理）
 │   └── tui_process.py     # TUI 进程入口（HttpMessageBus observer 模式）
-├── tools/
-│   ├── protocol.py        # ToolExecutor protocol
-│   ├── schemas.py         # trace + JADX tool schemas
-│   ├── trace_executor.py  # LocalTraceToolExecutor (ak_search daemon)
-│   └── jadx_executor.py   # JadxToolExecutor (HTTP → JADX Java Plugin)
 ├── verify/
 │   ├── hard.py            # 硬校验
 │   └── self_check.py      # 模型自查
@@ -238,7 +314,7 @@ src/duckagent/
 │           ├── message.py      # Markdown 消息渲染
 │           └── agent_card.py   # Agent 状态卡片
 ├── launcher.py            # 多进程启动器（subprocess.Popen）
-└── config.py              # pydantic-settings 配置
+└── config.py              # pydantic-settings 配置 + MCP 注册表
 tools/search/              # ak_search C 源码 + 编译产物
 prompts/                   # agent system prompts
 ```
@@ -300,9 +376,13 @@ DUCKAGENT_TRACE_CODE_FILE=/path/to/code.log
 DUCKAGENT_TRACE_RW_FILE=/path/to/rw.log
 DUCKAGENT_TRACE_BL_FILE=/path/to/bl.log
 
-# === JADX ===
-DUCKAGENT_JADX_HOST=127.0.0.1
-DUCKAGENT_JADX_PORT=8650
+# === MCP 服务器映射 ===
+DUCKAGENT_TRACE_AGENT_MCP_SERVERS=trace
+DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp
+DUCKAGENT_MCP_JSON_PATHS=~/.claude/.mcp.json
+
+# === 日志级别 ===
+DUCKAGENT_LOG_LEVEL=WARNING             # DEBUG | INFO | WARNING | ERROR
 
 # === 自校验（已关闭） ===
 DUCKAGENT_VERIFY_ENABLED=false
@@ -316,7 +396,7 @@ DUCKAGENT_VERIFY_MAX_RETRIES=3
 - **rw.log** — 内存读写：`行号: (r/w)(基址+偏移)` + hexdump
 - **bl.log** — PLT/函数调用：`code行号: [跳转地址][参数索引]: 函数符号名` + 参数 dump
 
-TraceAgent 通过 tool calling 自主搜索这些文件，不需要手动切片。
+TraceAgent 通过 MCP tool calling 自主搜索这些文件，不需要手动切片。
 
 ## 编码规范
 
@@ -324,7 +404,7 @@ TraceAgent 通过 tool calling 自主搜索这些文件，不需要手动切片�
 - 数据模型：Pydantic v2
 - 异步：agent 循环用 asyncio，TUI 用 Textual 的 asyncio 事件循环
 - 错误处理：不吞异常，该 raise 就 raise
-- 日志：structlog
+- 日志：structlog，默认 WARNING 级别
 - 配置：环境变量 + .env，不硬编码 key
 
 ## 设计原则
@@ -333,6 +413,7 @@ TraceAgent 通过 tool calling 自主搜索这些文件，不需要手动切片�
 - 消息总线是低频高密度的，不是工作日志
 - **bus 消息 ≠ LLM 上下文**，每条消息独立，不跨消息累积
 - **Agent 只响应 request/question，被 @ 在 conclusion 里只是 CC**
+- **Agent 是纯 MCP 客户端，不管理 server 生命周期**
 - 宁可上报人也不要让错误结论通过
 - 不要过度设计，先跑通再迭代
 - Agent 的 prompt 是核心

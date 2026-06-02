@@ -81,7 +81,6 @@ class DuckApp(App):
                 bus=self._bus,
                 model=settings.litellm_model,
                 prompts_dir=prompts_dir,
-                trace_files=settings.trace_files or None,
                 verify_enabled=settings.verify_enabled,
                 verify_max_retries=settings.verify_max_retries,
             )
@@ -89,8 +88,6 @@ class DuckApp(App):
                 bus=self._bus,
                 model=settings.litellm_model,
                 prompts_dir=prompts_dir,
-                jadx_host=settings.jadx_host,
-                jadx_port=settings.jadx_port,
                 verify_enabled=settings.verify_enabled,
                 verify_max_retries=settings.verify_max_retries,
             )

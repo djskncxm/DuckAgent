@@ -4,7 +4,8 @@ from pathlib import Path
 import structlog
 
 from duckagent.bus import Message
-from duckagent.tools import LocalTraceToolExecutor, TRACE_TOOLS
+from duckagent.config import settings
+from duckagent.mcp import McpClientManager, McpServerConfig
 from .base import BaseAgent
 
 logger = structlog.get_logger()
@@ -13,8 +14,10 @@ logger = structlog.get_logger()
 class TraceAgent(BaseAgent):
     """Agent specialized in analyzing ARM64 execution traces.
 
-    When trace files are provided, uses tool calling (trace_search, trace_context,
-    trace_cross_ref) to navigate large trace files autonomously.
+    When trace files are configured, connects to MCP servers named in
+    ``DUCKAGENT_TRACE_AGENT_MCP_SERVERS`` (default: ``"trace"``).
+    MCP servers are resolved from the built-in registry + any custom
+    servers defined in ``DUCKAGENT_MCP_SERVERS``.
     """
 
     def __init__(
@@ -22,7 +25,6 @@ class TraceAgent(BaseAgent):
         bus,
         model: str,
         prompts_dir: Path,
-        trace_files: dict[str, Path] | None = None,
         verify_enabled: bool = True,
         verify_max_retries: int = 3,
     ) -> None:
@@ -38,17 +40,21 @@ class TraceAgent(BaseAgent):
             verify_max_retries=verify_max_retries,
         )
 
-        self._executor: LocalTraceToolExecutor | None = None
-        self._tools: list[dict] | None = None
-        if trace_files:
-            existing = {k: v for k, v in trace_files.items() if v.exists()}
-            if existing:
-                self._executor = LocalTraceToolExecutor(existing)
-                self._tools = TRACE_TOOLS
+        # Only enable MCP if trace files actually exist
+        trace_files = settings.trace_files
+        existing = {k: v for k, v in trace_files.items() if v.exists()}
+        self._mcp_manager: McpClientManager | None = None
+        if existing:
+            configs = settings.resolve_mcp_configs("trace_agent")
+            if configs:
+                self._mcp_manager = McpClientManager(configs)
+
+    async def start(self) -> None:
+        await super().start()
 
     async def stop(self) -> None:
-        if self._executor:
-            self._executor.close()
+        if self._mcp_manager:
+            await self._mcp_manager.close()
         await super().stop()
 
     async def on_message(self, msg: Message) -> None:
@@ -57,10 +63,8 @@ class TraceAgent(BaseAgent):
         Only processes actionable message types (request, question).
         Being @mentioned in a conclusion/decision is just informational (CC) — no action.
         """
-        # Only request and question require action
         if msg.type not in ("request", "question"):
             return
-        # Must be addressed to us: either direct target or @mentioned
         addressed_to_us = (
             msg.to_agent == self.agent_id or
             (msg.mentions and self.agent_id in msg.mentions)
@@ -68,20 +72,16 @@ class TraceAgent(BaseAgent):
         if not addressed_to_us:
             return
 
-        # Build context-aware input
         input_text = msg.content
         if msg.from_agent:
             input_text = f"[来自 {msg.from_agent}]: {input_text}"
 
         response = await self.think(
             input_text,
-            tools=self._tools,
-            tool_executor=self._executor,
+            mcp_manager=self._mcp_manager,
         )
 
         evidence = self._extract_evidence(response)
-
-        # Respond to sender (or human if it was from human)
         reply_to = msg.from_agent if msg.from_agent != "human" else "human"
 
         await self.send(
@@ -95,14 +95,11 @@ class TraceAgent(BaseAgent):
 
     @staticmethod
     def _extract_evidence(text: str) -> list[str]:
-        """Extract line number references from the analysis text."""
         pattern = r"line \d+[^.;\n]*"
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        return matches
+        return re.findall(pattern, text, re.IGNORECASE)
 
     @staticmethod
     def _assess_confidence(text: str) -> str:
-        """Assess confidence level based on hedging language in the response."""
         low_indicators = ["不确定", "可能", "疑似", "unclear", "might", "possibly"]
         for indicator in low_indicators:
             if indicator in text.lower():
