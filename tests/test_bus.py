@@ -69,12 +69,12 @@ def test_message_invalid_confidence():
 
 import asyncio
 from pathlib import Path
-from duckagent.bus.store import MessageBus
+from duckagent.bus import LocalMessageBus
 
 
 @pytest.fixture
 async def bus(tmp_path):
-    b = MessageBus(db_path=tmp_path / "test.db")
+    b = LocalMessageBus(db_path=tmp_path / "test.db")
     await b.initialize()
     yield b
     await b.close()
@@ -181,7 +181,7 @@ async def test_get_history_filter_by_agent(bus):
 
 @pytest.mark.asyncio
 async def test_status_message_not_persisted(tmp_path):
-    bus = MessageBus(db_path=tmp_path / "test.db")
+    bus = LocalMessageBus(db_path=tmp_path / "test.db")
     await bus.initialize()
 
     msg = Message(
@@ -246,7 +246,7 @@ async def test_observer_receives_all_messages(bus):
 async def test_persistence_across_instances(tmp_path):
     db_path = tmp_path / "persist.db"
 
-    bus1 = MessageBus(db_path=db_path)
+    bus1 = LocalMessageBus(db_path=db_path)
     await bus1.initialize()
     await bus1.publish(Message(
         from_agent="trace_agent", to_agent=None,
@@ -255,7 +255,7 @@ async def test_persistence_across_instances(tmp_path):
     ))
     await bus1.close()
 
-    bus2 = MessageBus(db_path=db_path)
+    bus2 = LocalMessageBus(db_path=db_path)
     await bus2.initialize()
     history = await bus2.get_history()
     assert len(history) == 1
@@ -376,7 +376,7 @@ async def test_mentions_persisted_and_restored(tmp_path):
     """Mentions should survive persistence across MessageBus instances."""
     db_path = tmp_path / "mentions_persist.db"
 
-    bus1 = MessageBus(db_path=db_path)
+    bus1 = LocalMessageBus(db_path=db_path)
     await bus1.initialize()
     await bus1.publish(Message(
         from_agent="main_agent",
@@ -389,7 +389,7 @@ async def test_mentions_persisted_and_restored(tmp_path):
     ))
     await bus1.close()
 
-    bus2 = MessageBus(db_path=db_path)
+    bus2 = LocalMessageBus(db_path=db_path)
     await bus2.initialize()
     history = await bus2.get_history()
     assert len(history) == 1

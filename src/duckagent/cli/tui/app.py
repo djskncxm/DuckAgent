@@ -74,22 +74,16 @@ class DuckApp(App):
                 model=settings.litellm_model,
                 agent_md_path=agent_md_path,
                 prompts_dir=prompts_dir,
-                verify_enabled=settings.verify_enabled,
-                verify_max_retries=settings.verify_max_retries,
             )
             self._trace_agent = TraceAgent(
                 bus=self._bus,
                 model=settings.litellm_model,
                 prompts_dir=prompts_dir,
-                verify_enabled=settings.verify_enabled,
-                verify_max_retries=settings.verify_max_retries,
             )
             self._ida_jadx_agent = IdaJadxAgent(
                 bus=self._bus,
                 model=settings.litellm_model,
                 prompts_dir=prompts_dir,
-                verify_enabled=settings.verify_enabled,
-                verify_max_retries=settings.verify_max_retries,
             )
 
             await self._main_agent.start()
@@ -138,8 +132,8 @@ class DuckApp(App):
             await self._bus.close()
 
     def on_input_area_submitted(self, event: InputArea.Submitted) -> None:
-        from duckagent.agents.base import _AT_MENTION_RE
-        mentions = list(dict.fromkeys(_AT_MENTION_RE.findall(event.value)))
+        from duckagent.bus.models import parse_mentions
+        mentions = parse_mentions(event.value)
 
         msg = Message(
             from_agent="human",

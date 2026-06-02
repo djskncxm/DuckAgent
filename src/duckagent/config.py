@@ -30,8 +30,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     litellm_model: str = "anthropic/claude-sonnet-4-20250514"
     db_dir: str = ".duckagent"
-    verify_enabled: bool = True
-    verify_max_retries: int = 3
     prompts_dir: str = "prompts"
     trace_code_file: str | None = None
     trace_rw_file: str | None = None

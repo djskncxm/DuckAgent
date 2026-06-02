@@ -40,7 +40,6 @@ async def test_agent_receives_message(bus):
             system_prompt="You are an echo agent.",
             bus=bus,
             model="test-model",
-            verify_enabled=False,
         )
         await agent.start()
 
@@ -80,7 +79,6 @@ async def test_agent_context_is_per_call(bus):
             system_prompt="You are an echo agent.",
             bus=bus,
             model="test-model",
-            verify_enabled=False,
         )
         await agent.start()
 
@@ -124,7 +122,6 @@ async def test_main_agent_loads_agent_md(bus, agent_md):
             model="test-model",
             agent_md_path=agent_md,
             prompts_dir=agent_md.parent,
-            verify_enabled=False,
         )
         await agent.start()
 
@@ -146,7 +143,6 @@ async def test_main_agent_responds_to_human(bus, agent_md):
             model="test-model",
             agent_md_path=agent_md,
             prompts_dir=agent_md.parent,
-            verify_enabled=False,
         )
         await agent.start()
 
@@ -187,7 +183,6 @@ async def test_trace_agent_analyzes_request(bus, tmp_path):
             bus=bus,
             model="test-model",
             prompts_dir=prompts_dir,
-            verify_enabled=False,
         )
         await agent.start()
 
@@ -226,7 +221,6 @@ async def test_agent_broadcasts_thinking_status(tmp_path):
         system_prompt="test",
         bus=bus,
         model="fake/model",
-        verify_enabled=False,
     )
 
     with patch("litellm.acompletion") as mock_llm:

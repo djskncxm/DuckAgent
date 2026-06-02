@@ -61,8 +61,6 @@ def _create_agent(agent_type: str, bus: HttpMessageBus) -> Any:
             model=settings.litellm_model,
             agent_md_path=agent_md_path,
             prompts_dir=prompts_dir,
-            verify_enabled=settings.verify_enabled,
-            verify_max_retries=settings.verify_max_retries,
         )
 
     if agent_type == "trace_agent":
@@ -72,8 +70,6 @@ def _create_agent(agent_type: str, bus: HttpMessageBus) -> Any:
             bus=bus,
             model=settings.litellm_model,
             prompts_dir=prompts_dir,
-            verify_enabled=settings.verify_enabled,
-            verify_max_retries=settings.verify_max_retries,
         )
 
     if agent_type == "ida_jadx_agent":
@@ -83,8 +79,6 @@ def _create_agent(agent_type: str, bus: HttpMessageBus) -> Any:
             bus=bus,
             model=settings.litellm_model,
             prompts_dir=prompts_dir,
-            verify_enabled=settings.verify_enabled,
-            verify_max_retries=settings.verify_max_retries,
         )
 
     raise ValueError(f"Unknown agent type: {agent_type}")

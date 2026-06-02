@@ -74,13 +74,11 @@ async def test_full_flow_human_to_trace_and_back(system):
             model="test-model",
             agent_md_path=system["agent_md"],
             prompts_dir=system["prompts_dir"],
-            verify_enabled=False,
         )
         trace_agent = TraceAgent(
             bus=bus,
             model="test-model",
             prompts_dir=system["prompts_dir"],
-            verify_enabled=False,
         )
 
         await main_agent.start()

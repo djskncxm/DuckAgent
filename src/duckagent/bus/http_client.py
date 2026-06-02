@@ -64,6 +64,7 @@ class HttpMessageBus(MessageBus):
         self._ws: websockets.asyncio.client.ClientConnection | None = None
         self._ws_task: asyncio.Task[None] | None = None
         self._queues: list[asyncio.Queue[Message]] = []
+        self._agent_queues: dict[str, asyncio.Queue[Message]] = {}
         self._connected = False
 
     # --- MessageBus interface ---
@@ -97,6 +98,7 @@ class HttpMessageBus(MessageBus):
             self._http = None
 
         self._queues.clear()
+        self._agent_queues.clear()
 
     def subscribe(self, agent_id: str) -> asyncio.Queue[Message]:
         """Create a queue that receives messages for the given agent.
@@ -107,11 +109,17 @@ class HttpMessageBus(MessageBus):
         """
         queue: asyncio.Queue[Message] = asyncio.Queue()
         self._queues.append(queue)
+        self._agent_queues[agent_id] = queue
         return queue
 
     def unsubscribe(self, agent_id: str) -> None:
-        """Remove all queues.  Individual-queue removal is a no-op
-        (HttpMessageBus fans out to all queues)."""
+        """Remove the queue associated with this agent."""
+        queue = self._agent_queues.pop(agent_id, None)
+        if queue is not None:
+            try:
+                self._queues.remove(queue)
+            except ValueError:
+                pass
 
     def add_observer(self) -> asyncio.Queue[Message]:
         """Create a queue that receives every message (observer pattern).

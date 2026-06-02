@@ -1,24 +1,20 @@
 import asyncio
 import json
-import re
 from typing import Any
 
 import litellm
 import structlog
 
 from duckagent.bus import Message, MessageBus
-from duckagent.verify import hard_verify, VerificationError, self_check
+from duckagent.bus.models import parse_mentions
 
 logger = structlog.get_logger()
-
-_AT_MENTION_RE = re.compile(r"(?<!\w)@(\w[\w_-]*\w)")
 
 
 class BaseAgent:
     """Base class for all agents in the system.
 
-    Provides lifecycle management, message dispatch, LLM calling,
-    and integrated self-verification for conclusions.
+    Provides lifecycle management, message dispatch, and LLM calling.
     """
 
     def __init__(
@@ -27,15 +23,11 @@ class BaseAgent:
         system_prompt: str,
         bus: MessageBus,
         model: str,
-        verify_enabled: bool = True,
-        verify_max_retries: int = 3,
     ) -> None:
         self.agent_id = agent_id
         self.system_prompt = system_prompt
         self.bus = bus
         self.model = model
-        self.verify_enabled = verify_enabled
-        self.verify_max_retries = verify_max_retries
         self._queue: asyncio.Queue[Message] | None = None
         self._task: asyncio.Task | None = None
         self._history: list[dict[str, Any]] = []
@@ -82,7 +74,7 @@ class BaseAgent:
     @staticmethod
     def _parse_mentions(text: str) -> list[str]:
         """Extract unique @agent_id mentions in order of first appearance."""
-        return list(dict.fromkeys(_AT_MENTION_RE.findall(text)))
+        return parse_mentions(text)
 
     async def on_message(self, msg: Message) -> None:
         """Handle an incoming message.
@@ -246,7 +238,7 @@ class BaseAgent:
         reply_to: str | None = None,
         mentions: list[str] | None = None,
     ) -> None:
-        """Send a message through the bus, with optional self-verification.
+        """Send a message through the bus.
 
         If `mentions` is None, @agent_id patterns are auto-parsed from content.
         Pass an explicit list (including empty) to override.
@@ -265,51 +257,59 @@ class BaseAgent:
             reply_to=reply_to,
         )
 
-        if self.verify_enabled and msg.type == "conclusion":
-            hard_verify(msg)
-
-            for attempt in range(self.verify_max_retries):
-                result = await self_check(msg, model=self.model)
-                if result.passed:
-                    break
-                logger.warning(
-                    "self_check_failed",
-                    agent_id=self.agent_id,
-                    attempt=attempt + 1,
-                    reason=result.reason,
-                )
-                if attempt == self.verify_max_retries - 1:
-                    await self.bus.publish(Message(
-                        from_agent=self.agent_id,
-                        to_agent="human",
-                        mentions=mentions,
-                        type="question",
-                        content=(
-                            f"自校验连续失败 {self.verify_max_retries} 次，"
-                            f"需要人工审核:\n\n原始结论: {content}\n\n"
-                            f"最后一次失败原因: {result.reason}"
-                        ),
-                        evidence=evidence or [],
-                        confidence="low",
-                    ))
-                    return
-
-                retry_response = await self.think(
-                    f"你的上一个结论未通过自校验: {result.reason}\n"
-                    f"请重新分析并给出修正后的结论。"
-                )
-                # Re-parse mentions from retry response
-                retry_mentions = self._parse_mentions(retry_response) if mentions else []
-                msg = Message(
-                    from_agent=self.agent_id,
-                    to_agent=to,
-                    mentions=retry_mentions,
-                    type=type,
-                    content=retry_response,
-                    evidence=evidence or [],
-                    confidence=confidence,
-                    reply_to=reply_to,
-                )
-                hard_verify(msg)
-
         await self.bus.publish(msg)
+
+
+class ToolAgent(BaseAgent):
+    """Base class for agents that use MCP tools to process requests.
+
+    Provides a standard on_message flow: filter → think → reply.
+    Subclasses set ``_mcp_manager`` and optionally override ``_extract_evidence``.
+    """
+
+    _mcp_manager: Any = None
+
+    async def on_message(self, msg: Message) -> None:
+        if msg.type not in ("request", "question"):
+            return
+        addressed_to_us = (
+            msg.to_agent == self.agent_id or
+            (msg.mentions and self.agent_id in msg.mentions)
+        )
+        if not addressed_to_us:
+            return
+
+        input_text = msg.content
+        if msg.from_agent:
+            input_text = f"[来自 {msg.from_agent}]: {input_text}"
+
+        response = await self.think(input_text, mcp_manager=self._mcp_manager)
+
+        evidence = self._extract_evidence(response)
+        reply_to = msg.from_agent if msg.from_agent != "human" else "human"
+
+        await self.send(
+            to=reply_to,
+            content=response,
+            type="conclusion",
+            evidence=evidence if evidence else [self._default_evidence],
+            confidence=self._assess_confidence(response),
+            reply_to=msg.id,
+        )
+
+    @property
+    def _default_evidence(self) -> str:
+        return "analysis"
+
+    @staticmethod
+    def _extract_evidence(text: str) -> list[str]:
+        """Override in subclasses for domain-specific evidence extraction."""
+        return []
+
+    @staticmethod
+    def _assess_confidence(text: str) -> str:
+        low_indicators = ["不确定", "可能", "疑似", "unclear", "might", "possibly"]
+        for indicator in low_indicators:
+            if indicator in text.lower():
+                return "low"
+        return "high"

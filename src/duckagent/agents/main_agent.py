@@ -41,8 +41,6 @@ class MainAgent(BaseAgent):
         model: str,
         agent_md_path: Path,
         prompts_dir: Path,
-        verify_enabled: bool = True,
-        verify_max_retries: int = 3,
     ) -> None:
         prompt_file = prompts_dir / "main_agent.md"
         base_prompt = prompt_file.read_text() if prompt_file.exists() else "你是主协调 Agent。"
@@ -58,8 +56,6 @@ class MainAgent(BaseAgent):
             system_prompt=system_prompt,
             bus=bus,
             model=model,
-            verify_enabled=False,  # main agent doesn't need self-check
-            verify_max_retries=verify_max_retries,
         )
 
     async def on_message(self, msg: Message) -> None:

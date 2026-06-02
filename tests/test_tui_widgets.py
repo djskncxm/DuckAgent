@@ -102,7 +102,7 @@ async def test_agent_card_update_status():
 # --- DuckApp tests (Task 7-8) ---
 
 from duckagent.cli.tui.app import DuckApp
-from duckagent.bus.store import MessageBus
+from duckagent.bus import LocalMessageBus
 
 
 class DuckAppLayoutTest(App):
@@ -147,7 +147,7 @@ async def test_duck_app_instantiable():
 @pytest.mark.asyncio
 async def test_duck_app_bus_lifecycle():
     """Test DuckApp bus initialize and close with a real SQLite database."""
-    bus = MessageBus(db_path=Path(".duckagent/test_messages.db"))
+    bus = LocalMessageBus(db_path=Path(".duckagent/test_messages.db"))
     await bus.initialize()
     queue = bus.subscribe("test_agent")
     assert queue is not None
