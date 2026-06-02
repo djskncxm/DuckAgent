@@ -222,9 +222,13 @@ Agent 的 `on_message()` 只响应 `request` 和 `question` 类型。被 @mentio
 
 ### 上下文管理
 
-**关键设计：bus 消息 ≠ LLM 上下文。**
+**Agent 维护完整对话历史（`self._history`）。**
 
-每条消息是独立请求。`think()` 每次调用从 system prompt + 当前输入构建上下文，工具调用循环在同一个 `think()` 内局部扩展，函数返回后丢弃。不跨消息累积。
+每个 agent 实例在内存中保持一个 messages 列表，累积所有收到的消息和自己的回复。`think()` 每次调用时构建：system prompt + 完整历史 + 当前 tool calling 循环。Tool calling 的中间步骤（assistant with tool_calls + tool results）是局部的，只有最终文本回复进入持久历史。
+
+如果 API 报 context length error，自动从最老的消息开始截断并重试。
+
+历史生命周期 = 进程生命周期。进程重启后历史清零（bus 里的持久化消息不会自动回灌到 LLM context）。
 
 ### Agent 状态广播
 

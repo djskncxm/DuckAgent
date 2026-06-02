@@ -352,6 +352,14 @@ class McpClientManager:
 
     # ── Helpers ──────────────────────────────────────────────────
 
+    def get_unavailable_servers(self) -> list[tuple[str, str]]:
+        """Return (name, error) pairs for servers that failed to connect."""
+        result: list[tuple[str, str]] = []
+        for conn in self._connections.values():
+            if not conn.is_connected and conn._connect_error:
+                result.append((conn.config.name, conn._connect_error))
+        return result
+
     def _rebuild_routing_table(self) -> None:
         self._tool_to_server.clear()
         for conn in self._connections.values():

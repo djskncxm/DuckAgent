@@ -38,6 +38,7 @@ class BaseAgent:
         self.verify_max_retries = verify_max_retries
         self._queue: asyncio.Queue[Message] | None = None
         self._task: asyncio.Task | None = None
+        self._history: list[dict[str, Any]] = []
 
     async def start(self) -> None:
         """Subscribe to the bus and start the message processing loop."""
@@ -109,11 +110,14 @@ class BaseAgent:
 
     async def think(self, input_text: str, *, tools: list[dict] | None = None,
                     mcp_manager: Any = None, max_iterations: int = 50) -> str:
-        """Call the LLM with a fresh context each time — no cross-message accumulation.
+        """Call the LLM with full conversation history for multi-turn coherence.
 
-        Bus messages are not LLM context. Each think() call starts from just the
-        system prompt + this input. The tool calling loop extends context locally
-        within a single call, but that context is discarded when think() returns.
+        Maintains ``self._history`` across calls so the agent remembers prior
+        exchanges. Tool-calling loops expand context locally within a single
+        call; only the final assistant response is persisted to history.
+
+        If the model returns a context-length error, the oldest messages are
+        trimmed and the call is retried automatically.
 
         Args:
             input_text: The user/agent input to reason about.
@@ -122,10 +126,7 @@ class BaseAgent:
             mcp_manager: ``McpClientManager`` for MCP-based async tool calls.
             max_iterations: Max tool-calling loop iterations.
         """
-        context: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": input_text},
-        ]
+        self._history.append({"role": "user", "content": input_text})
         await self._broadcast_status("thinking", task_summary=input_text[:80])
 
         # Resolve tools from MCP manager (lazy connect on first use)
@@ -133,27 +134,38 @@ class BaseAgent:
         if mcp_manager is not None and _tools is None:
             _tools = await mcp_manager.ensure_tools()
 
+        # Build context: system prompt + conversation history + local tool loop
+        local_tool_messages: list[dict[str, Any]] = []
+
         for _ in range(max_iterations):
+            context: list[dict[str, Any]] = [
+                {"role": "system", "content": self.system_prompt},
+                *self._history,
+                *local_tool_messages,
+            ]
+
             kwargs: dict[str, Any] = {"model": self.model, "messages": context}
             if _tools:
                 kwargs["tools"] = _tools
                 kwargs["tool_choice"] = "auto"
 
-            response = await self._call_llm_with_retry(**kwargs)
+            response = await self._call_llm_with_context_retry(
+                context, local_tool_messages, **kwargs
+            )
             message = response.choices[0].message
 
             assistant_entry: dict[str, Any] = {"role": "assistant", "content": message.content or ""}
             tool_calls = getattr(message, "tool_calls", None)
-            # Guard: only treat as real tool_calls if it's a non-empty list
-            # (avoids AsyncMock false-positives in tests)
             if isinstance(tool_calls, list) and tool_calls:
                 assistant_entry["tool_calls"] = [
                     tc.model_dump() if hasattr(tc, "model_dump") else tc
                     for tc in tool_calls
                 ]
-            context.append(assistant_entry)
+            local_tool_messages.append(assistant_entry)
 
             if not isinstance(tool_calls, list) or not tool_calls:
+                # Persist only the final text response to history
+                self._history.append({"role": "assistant", "content": message.content or ""})
                 await self._broadcast_status("idle")
                 return message.content or ""
 
@@ -163,7 +175,7 @@ class BaseAgent:
                     name = tc.function.name
                     arguments = json.loads(tc.function.arguments)
                     result = await mcp_manager.call_tool(name, arguments)
-                    context.append({
+                    local_tool_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": name,
@@ -172,11 +184,42 @@ class BaseAgent:
                 continue
 
             # No tool executor available
+            self._history.append({"role": "assistant", "content": message.content or ""})
             await self._broadcast_status("idle")
             return message.content or ""
 
         await self._broadcast_status("idle")
         return "Reached max iterations without final answer."
+
+    async def _call_llm_with_context_retry(
+        self,
+        context: list[dict[str, Any]],
+        local_tool_messages: list[dict[str, Any]],
+        **kwargs,
+    ) -> Any:
+        """Call LLM; on context-length error, trim oldest history and retry."""
+        try:
+            return await self._call_llm_with_retry(**kwargs)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "context" not in error_str and "length" not in error_str and "token" not in error_str:
+                raise
+            # Trim oldest history pairs (keep at least the latest user message)
+            trimmed = 0
+            while len(self._history) > 2:
+                self._history.pop(0)
+                trimmed += 1
+                if trimmed >= 4:
+                    break
+            logger.warning("context_trimmed", agent_id=self.agent_id, trimmed=trimmed,
+                           remaining=len(self._history))
+            # Rebuild context and retry once
+            kwargs["messages"] = [
+                {"role": "system", "content": self.system_prompt},
+                *self._history,
+                *local_tool_messages,
+            ]
+            return await self._call_llm_with_retry(**kwargs)
 
     async def _call_llm_with_retry(self, max_retries: int = 3, **kwargs) -> Any:
         """Call litellm with retry on transient errors."""
