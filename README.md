@@ -138,3 +138,7 @@ src/duckagent/
 ## 技术栈
 
 Python 3.12+ · litellm · FastAPI · uvicorn · httpx · websockets · Textual · SQLite · aiosqlite · typer · structlog · Pydantic v2 · uv
+
+## 作者疑问
+不知道为啥Claude code 4.6的版本总是会先说一句"我先检查一下ida和jadx的状态"，然后就寄了
+但是DeepSeek就会正常的去干活，看看后续怎么做吧，我听大佬说是因为cc的多思考，DeepSeek思考比较浅
