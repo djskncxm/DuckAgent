@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     # Comma-separated MCP server names each agent type connects to.
     # Server names are looked up in: built-in registry → DUCKAGENT_MCP_SERVERS
     # JSON → ~/.claude/.mcp.json (Claude Code format).
-    trace_agent_mcp_servers: str = Field(default="trace", validation_alias="DUCKAGENT_TRACE_AGENT_MCP_SERVERS")
-    ida_jadx_agent_mcp_servers: str = Field(default="ida-pro-mcp,jadx-mcp", validation_alias="DUCKAGENT_JADX_AGENT_MCP_SERVERS")
-    main_agent_mcp_servers: str = Field(default="", validation_alias="DUCKAGENT_MAIN_AGENT_MCP_SERVERS")
+    trace_agent_mcp_servers: str = Field(default="trace,file", validation_alias="DUCKAGENT_TRACE_AGENT_MCP_SERVERS")
+    ida_jadx_agent_mcp_servers: str = Field(default="ida-pro-mcp,jadx-mcp,file", validation_alias="DUCKAGENT_JADX_AGENT_MCP_SERVERS")
+    main_agent_mcp_servers: str = Field(default="file", validation_alias="DUCKAGENT_MAIN_AGENT_MCP_SERVERS")
 
     # JSON blob of custom MCP server configs.
     # Example: '{"ida":{"command":"python","args":["-m","my_ida_mcp"]}}'
@@ -159,6 +159,9 @@ class Settings(BaseSettings):
             env["DUCKAGENT_TRACE_CODE_FILE"] = str(existing.get("code", ""))
             env["DUCKAGENT_TRACE_RW_FILE"] = str(existing.get("rw", ""))
             env["DUCKAGENT_TRACE_BL_FILE"] = str(existing.get("bl", ""))
+
+        if name == "file":
+            env.setdefault("DUCKAGENT_FILE_BASE_DIR", str(Path.cwd()))
 
         if "jadx" in name:
             env.setdefault("DUCKAGENT_JADX_HOST", self.jadx_host)

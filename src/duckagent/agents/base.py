@@ -1,6 +1,7 @@
 import asyncio
 import json
-from typing import Any
+import subprocess
+from typing import Any, Callable
 
 import litellm
 import structlog
@@ -9,6 +10,84 @@ from duckagent.bus import Message, MessageBus
 from duckagent.bus.models import parse_mentions
 
 logger = structlog.get_logger()
+
+# ── Local tool: shell_exec ───────────────────────────────────────────
+
+SHELL_EXEC_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "shell_exec",
+        "description": "Execute a shell command and return stdout+stderr. Use for compiling, running tools, inspecting files, etc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default 30)",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+
+DANGEROUS_COMMANDS = {"sudo", "rm", "chmod", "chown", "mkfs", "dd", "shutdown", "reboot", "kill", "killall", "pkill"}
+
+
+def _check_dangerous(command: str) -> str | None:
+    """Return error string if command contains dangerous keywords, else None."""
+    # Block output redirections (except /dev/null and &1/&2 fd redirects)
+    import re
+    # Match > or >> NOT followed by /dev/null or &1/&2
+    for m in re.finditer(r'(\d*)>{1,2}\s*(\S+)', command):
+        target = m.group(2)
+        if target in ("/dev/null", "&1", "&2"):
+            continue
+        return "[blocked] 文件写入请使用 file_write/file_append 工具，不要用 shell 重定向"
+
+    tokens = command.split()
+    for token in tokens:
+        base = token.split("/")[-1]
+        if base in DANGEROUS_COMMANDS:
+            return f"[blocked] 危险命令 `{base}` 需要人工执行，agent 不允许调用"
+    if "|" in command or ";" in command or "&&" in command:
+        parts = command.replace("|", " ").replace(";", " ").replace("&&", " ").split()
+        for part in parts:
+            base = part.split("/")[-1]
+            if base in DANGEROUS_COMMANDS:
+                return f"[blocked] 危险命令 `{base}` 需要人工执行，agent 不允许调用"
+    return None
+
+
+def _exec_shell(command: str, timeout: int = 30) -> str:
+    blocked = _check_dangerous(command)
+    if blocked:
+        return blocked
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=timeout,
+        )
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            output = f"[exit code {result.returncode}]\n{output}"
+        return output.strip() or "(no output)"
+    except subprocess.TimeoutExpired:
+        return f"[timeout after {timeout}s]"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+# Registry: name → callable(arguments_dict) → str
+LOCAL_TOOLS: dict[str, Callable[[dict[str, Any]], str]] = {
+    "shell_exec": lambda args: _exec_shell(args["command"], args.get("timeout", 30)),
+}
+
+LOCAL_TOOL_SCHEMAS: list[dict[str, Any]] = [SHELL_EXEC_SCHEMA]
 
 
 class BaseAgent:
@@ -125,6 +204,11 @@ class BaseAgent:
         _tools: list[dict] | None = tools
         if mcp_manager is not None and _tools is None:
             _tools = await mcp_manager.ensure_tools()
+        # Merge local tools
+        if _tools is None:
+            _tools = list(LOCAL_TOOL_SCHEMAS)
+        else:
+            _tools = list(_tools) + LOCAL_TOOL_SCHEMAS
 
         # Build context: system prompt + conversation history + local tool loop
         local_tool_messages: list[dict[str, Any]] = []
@@ -161,12 +245,18 @@ class BaseAgent:
                 await self._broadcast_status("idle")
                 return message.content or ""
 
-            if mcp_manager is not None:
+            if mcp_manager is not None or LOCAL_TOOLS:
                 await self._broadcast_status("tool_calling")
                 for tc in tool_calls:
                     name = tc.function.name
                     arguments = json.loads(tc.function.arguments)
-                    result = await mcp_manager.call_tool(name, arguments)
+                    # Local tools take priority over MCP
+                    if name in LOCAL_TOOLS:
+                        result = LOCAL_TOOLS[name](arguments)
+                    elif mcp_manager is not None:
+                        result = await mcp_manager.call_tool(name, arguments)
+                    else:
+                        result = f'{{"status": "error", "error": "Unknown tool: {name}"}}'
                     local_tool_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -174,11 +264,6 @@ class BaseAgent:
                         "content": result,
                     })
                 continue
-
-            # No tool executor available
-            self._history.append({"role": "assistant", "content": message.content or ""})
-            await self._broadcast_status("idle")
-            return message.content or ""
 
         await self._broadcast_status("idle")
         return "Reached max iterations without final answer."

@@ -81,6 +81,14 @@ class McpServerConfig:
         )
 
     @classmethod
+    def file(cls, *, env: dict[str, str] | None = None) -> McpServerConfig:
+        """Built-in file MCP server (stdio, general-purpose file read/write)."""
+        return cls.stdio(
+            name="file", command=sys.executable,
+            args=["-m", "duckagent.mcp.servers.file_server"], env=env,
+        )
+
+    @classmethod
     def jadx(cls, *, env: dict[str, str] | None = None) -> McpServerConfig:
         """Built-in JADX MCP server wrapper (stdio, fallback)."""
         return cls.stdio(
@@ -371,4 +379,5 @@ class McpClientManager:
 
 BUILTIN_MCP_SERVERS: dict[str, McpServerConfig] = {
     "trace": McpServerConfig.trace(),
+    "file": McpServerConfig.file(),
 }

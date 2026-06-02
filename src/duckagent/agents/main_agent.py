@@ -1,8 +1,11 @@
 import re
 from pathlib import Path
+from typing import Any
 
 import structlog
 
+from duckagent.config import settings
+from duckagent.mcp import McpClientManager
 from duckagent.bus import Message
 from .base import BaseAgent
 
@@ -58,6 +61,14 @@ class MainAgent(BaseAgent):
             model=model,
         )
 
+        configs = settings.resolve_mcp_configs("main_agent")
+        self._mcp_manager: McpClientManager | None = McpClientManager(configs) if configs else None
+
+    async def stop(self) -> None:
+        if self._mcp_manager:
+            await self._mcp_manager.close()
+        await super().stop()
+
     async def on_message(self, msg: Message) -> None:
         """Handle incoming message: think using LLM, route by @mentions in response."""
 
@@ -67,7 +78,7 @@ class MainAgent(BaseAgent):
             context_info += f" [提及了: {', '.join(msg.mentions)}]"
         input_text = f"{context_info}: {msg.content}"
 
-        response = await self.think(input_text)
+        response = await self.think(input_text, mcp_manager=self._mcp_manager)
 
         # Parse @mentions from LLM's response and route to internal agents
         response_mentions = self._parse_mentions(response)

@@ -76,9 +76,9 @@ Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调�
 
 | 角色 | agent_id | 职责 | MCP Servers |
 |------|----------|------|-------------|
-| MainAgent | main_agent | 协调、拆解任务、综合结论 | 无（纯推理） |
-| TraceAgent | trace_agent | 执行流分析、算法还原 | trace（内置 stdio） |
-| IdaJadxAgent | ida_jadx_agent | 静态分析、反汇编、反编译 | ida-pro-mcp + jadx-mcp |
+| MainAgent | main_agent | 协调、拆解任务、综合结论 | file（内置） |
+| TraceAgent | trace_agent | 执行流分析、算法还原 | trace + file（内置 stdio） |
+| IdaJadxAgent | ida_jadx_agent | 静态分析、反汇编、反编译 | ida-pro-mcp + jadx-mcp + file |
 | 人（Leader） | human | 终审、路径决策 | Textual TUI |
 
 ### 未来角色
@@ -116,6 +116,10 @@ Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调�
 }
 ```
 
+内置 MCP servers（无需配置）：
+- **trace** — trace 文件搜索（FastMCP + ak_search）
+- **file** — 通用文件读写（file_read / file_write / file_list / file_append）
+
 支持两种传输：
 - **stdio**：subprocess 子进程（stderr 输出被吞到 /dev/null）
 - **http**：Streamable HTTP（连接外部 MCP server）
@@ -125,9 +129,9 @@ Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调�
 通过环境变量配置哪个 agent 连哪些 server：
 
 ```bash
-DUCKAGENT_TRACE_AGENT_MCP_SERVERS=trace              # 内置
-DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp  # 从 .mcp.json 读
-DUCKAGENT_MAIN_AGENT_MCP_SERVERS=                    # 纯推理，无工具
+DUCKAGENT_TRACE_AGENT_MCP_SERVERS=trace,file        # 内置
+DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp,file  # 从 .mcp.json 读
+DUCKAGENT_MAIN_AGENT_MCP_SERVERS=file               # 文件读写
 ```
 
 ### 添加新 MCP server
@@ -139,6 +143,23 @@ DUCKAGENT_MAIN_AGENT_MCP_SERVERS=                    # 纯推理，无工具
 # 1. 在 .mcp.json 的 mcpServers 里加 "frida": {...}
 # 2. 设置 DUCKAGENT_JADX_AGENT_MCP_SERVERS=ida-pro-mcp,jadx-mcp,frida
 ```
+
+## 本地工具（非 MCP）
+
+定义在 `BaseAgent` 层面，所有 agent 自动拥有，不走 MCP 协议。
+
+### shell_exec
+
+执行 shell 命令，返回 stdout + stderr。
+
+安全限制：
+- **危险命令拦截**：`sudo`、`rm`、`chmod`、`chown`、`mkfs`、`dd`、`shutdown`、`reboot`、`kill`、`killall`、`pkill` 直接 blocked
+- **重定向拦截**：`>` 和 `>>` 写文件被 blocked（放行 `/dev/null`、`&1`、`&2`），强制使用 file_write/file_append
+- 超时默认 30 秒
+
+Tool dispatch 优先级：本地工具 > MCP 工具。
+
+扩展方式：往 `base.py` 的 `LOCAL_TOOLS` 字典和 `LOCAL_TOOL_SCHEMAS` 列表里加即可。
 
 ## TUI
 
@@ -285,8 +306,8 @@ src/duckagent/
 │   ├── db.py              # SQLite 持久层
 │   └── dispatcher.py      # 纯函数路由逻辑
 ├── agents/
-│   ├── base.py            # BaseAgent: 生命周期、think()、MCP tool calling
-│   ├── main_agent.py      # MainAgent: @mention 路由、JSON 清理
+│   ├── base.py            # BaseAgent: 生命周期、think()、MCP + 本地工具 calling
+│   ├── main_agent.py      # MainAgent: @mention 路由、JSON 清理、MCP 连接
 │   ├── trace_agent.py     # TraceAgent: MCP 连接 trace server
 │   └── ida_jadx_agent.py  # IdaJadxAgent: MCP 连接 IDA + JADX
 ├── mcp/
@@ -295,6 +316,7 @@ src/duckagent/
 │   ├── client_manager.py  # McpClientManager: 连接管理、路由、惰性连接
 │   └── servers/
 │       ├── trace_server.py  # 内置 trace MCP server (FastMCP + ak_search)
+│       ├── file_server.py   # 内置 file MCP server (通用文件读写)
 │       └── jadx_server.py   # 内置 JADX MCP server wrapper (FastMCP)
 ├── tools/
 │   ├── protocol.py        # ToolExecutor protocol (legacy)
