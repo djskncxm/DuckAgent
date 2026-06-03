@@ -35,6 +35,11 @@ logger = structlog.get_logger()
 # How long to wait for server health check on connect / reconnect
 _CONNECT_TIMEOUT = 10.0
 
+# Reconnect backoff parameters
+_RECONNECT_BASE_DELAY = 1.0  # seconds
+_RECONNECT_MAX_DELAY = 30.0  # seconds
+_RECONNECT_MAX_ATTEMPTS = 0  # 0 = unlimited
+
 
 class ConnectionError(Exception):
     """Raised when the bus server is unreachable."""
@@ -66,6 +71,7 @@ class HttpMessageBus(MessageBus):
         self._queues: list[asyncio.Queue[Message]] = []
         self._agent_queues: dict[str, asyncio.Queue[Message]] = {}
         self._connected = False
+        self._closing = False
 
     # --- MessageBus interface ---
 
@@ -76,6 +82,7 @@ class HttpMessageBus(MessageBus):
 
     async def close(self) -> None:
         """Disconnect from the bus server and release all resources."""
+        self._closing = True
         self._connected = False
 
         if self._ws_task:
@@ -176,17 +183,17 @@ class HttpMessageBus(MessageBus):
 
     # --- WebSocket lifecycle ---
 
-    async def _connect_ws(self) -> None:
-        """Open the WebSocket connection and start the reader task.
-
-        Chooses the query param based on agent/observer mode.
-        """
+    def _build_ws_url(self) -> str:
         ws_url = self._server_url.replace("http://", "ws://").replace("https://", "wss://")
         if self._agent_id:
             ws_url += f"/ws?agent_id={self._agent_id}"
         else:
             ws_url += "/ws?role=observer"
+        return ws_url
 
+    async def _connect_ws(self) -> None:
+        """Open the WebSocket connection and start the reader task."""
+        ws_url = self._build_ws_url()
         self._ws = await websockets.asyncio.client.connect(
             ws_url, open_timeout=_CONNECT_TIMEOUT
         )
@@ -198,42 +205,83 @@ class HttpMessageBus(MessageBus):
             agent_id=self._agent_id or "observer",
         )
 
-    # --- WebSocket reader ---
+    # --- WebSocket reader with reconnect ---
 
     async def _ws_reader(self) -> None:
         """Background task: read messages from WebSocket, fan out to all queues.
 
-        Runs until the WebSocket closes or is cancelled.
+        On disconnect, automatically reconnects with exponential backoff
+        unless close() was called.
         """
+        attempt = 0
+
+        while not self._closing:
+            try:
+                await self._ws_read_loop()
+            except asyncio.CancelledError:
+                return
+            except (websockets.ConnectionClosed, OSError) as exc:
+                self._connected = False
+                if self._closing:
+                    return
+                attempt += 1
+                delay = min(_RECONNECT_BASE_DELAY * (2 ** (attempt - 1)), _RECONNECT_MAX_DELAY)
+                logger.warning(
+                    "ws_disconnected_reconnecting",
+                    agent_id=self._agent_id or "observer",
+                    attempt=attempt,
+                    delay=delay,
+                    error=str(exc)[:100],
+                )
+                await asyncio.sleep(delay)
+                # Attempt reconnect
+                try:
+                    ws_url = self._build_ws_url()
+                    self._ws = await websockets.asyncio.client.connect(
+                        ws_url, open_timeout=_CONNECT_TIMEOUT
+                    )
+                    self._connected = True
+                    attempt = 0
+                    logger.info(
+                        "ws_reconnected",
+                        agent_id=self._agent_id or "observer",
+                    )
+                except (OSError, websockets.WebSocketException) as reconn_exc:
+                    logger.warning(
+                        "ws_reconnect_failed",
+                        agent_id=self._agent_id or "observer",
+                        attempt=attempt,
+                        error=str(reconn_exc)[:100],
+                    )
+            except Exception as exc:
+                self._connected = False
+                if self._closing:
+                    return
+                logger.error("ws_reader_unexpected_error", error=str(exc)[:200])
+                return
+
+    async def _ws_read_loop(self) -> None:
+        """Read messages from the current WebSocket connection until it closes."""
         assert self._ws is not None
-        try:
-            async for raw in self._ws:
-                try:
-                    payload: dict[str, Any] = json.loads(raw)
-                except json.JSONDecodeError:
-                    logger.warning("ws_bad_json", raw=raw[:200])
-                    continue
+        async for raw in self._ws:
+            try:
+                payload: dict[str, Any] = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("ws_bad_json", raw=raw[:200])
+                continue
 
-                if payload.get("type") != "message":
-                    continue
+            if payload.get("type") != "message":
+                continue
 
-                data = payload.get("data")
-                if not isinstance(data, dict):
-                    continue
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                continue
 
-                try:
-                    msg = Message(**data)
-                except Exception:
-                    logger.warning("ws_bad_message", data=str(data)[:200])
-                    continue
+            try:
+                msg = Message(**data)
+            except Exception:
+                logger.warning("ws_bad_message", data=str(data)[:200])
+                continue
 
-                # Fan out to every registered queue
-                for q in self._queues:
-                    q.put_nowait(msg)
-
-        except websockets.ConnectionClosed:
-            logger.info("ws_connection_closed", agent_id=self._agent_id or "observer")
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._connected = False
+            for q in self._queues:
+                q.put_nowait(msg)

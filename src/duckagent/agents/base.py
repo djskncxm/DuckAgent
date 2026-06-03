@@ -96,6 +96,9 @@ class BaseAgent:
     Provides lifecycle management, message dispatch, and LLM calling.
     """
 
+    _MID_STEP_INDICATORS = ["接下来", "然后我", "下一步", "让我", "我将", "首先检查", "我先", "我需要先"]
+    _FINAL_INDICATORS = ["结论", "结果", "综上", "confidence", "evidence", "不可用", "未连接", "blocked"]
+
     def __init__(
         self,
         agent_id: str,
@@ -179,8 +182,17 @@ class BaseAgent:
         )
         await self.bus.publish(msg)
 
+    def _is_mid_step_pause(self, text: str) -> bool:
+        """Detect if the model paused mid-task instead of giving a final answer."""
+        if not text or len(text) > 2000:
+            return False
+        has_mid = any(ind in text for ind in self._MID_STEP_INDICATORS)
+        has_final = any(ind in text for ind in self._FINAL_INDICATORS)
+        return has_mid and not has_final
+
     async def think(self, input_text: str, *, tools: list[dict] | None = None,
-                    mcp_manager: Any = None, max_iterations: int = 50) -> str:
+                    mcp_manager: Any = None, max_iterations: int = 50,
+                    max_continuations: int = 3) -> str:
         """Call the LLM with full conversation history for multi-turn coherence.
 
         Maintains ``self._history`` across calls so the agent remembers prior
@@ -196,6 +208,8 @@ class BaseAgent:
                 is provided, tools are fetched dynamically from MCP servers.
             mcp_manager: ``McpClientManager`` for MCP-based async tool calls.
             max_iterations: Max tool-calling loop iterations.
+            max_continuations: Max times to nudge the model if it pauses
+                mid-task without calling tools or giving a final conclusion.
         """
         self._history.append({"role": "user", "content": input_text})
         await self._broadcast_status("thinking", task_summary=input_text[:80])
@@ -212,6 +226,7 @@ class BaseAgent:
 
         # Build context: system prompt + conversation history + local tool loop
         local_tool_messages: list[dict[str, Any]] = []
+        continuation_count = 0
 
         for _ in range(max_iterations):
             context: list[dict[str, Any]] = [
@@ -240,10 +255,19 @@ class BaseAgent:
             local_tool_messages.append(assistant_entry)
 
             if not isinstance(tool_calls, list) or not tool_calls:
-                # Persist only the final text response to history
-                self._history.append({"role": "assistant", "content": message.content or ""})
+                text = message.content or ""
+                # Detect mid-step pause and nudge the model to continue
+                if self._is_mid_step_pause(text) and continuation_count < max_continuations:
+                    continuation_count += 1
+                    local_tool_messages.append({
+                        "role": "user",
+                        "content": "继续执行，不要停顿描述计划。直接调用工具或给出最终结论。",
+                    })
+                    continue
+                # Final output
+                self._history.append({"role": "assistant", "content": text})
                 await self._broadcast_status("idle")
-                return message.content or ""
+                return text
 
             if mcp_manager is not None or LOCAL_TOOLS:
                 await self._broadcast_status("tool_calling")
