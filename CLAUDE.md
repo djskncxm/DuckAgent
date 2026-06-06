@@ -165,10 +165,24 @@ Tool dispatch 优先级：本地工具 > MCP 工具。
 
 每个 agent 窗口独立——在哪个窗口发的消息就路由给哪个 agent。窗口间互不干预。
 
+聊天窗口特性：
+- Markdown 渲染：rich 库 → ANSI → prompt_toolkit formatted text（`**bold**`、代码块、列表等）
+- 流式显示：每条消息到达即渲染追加，非批量刷新
+- 自动截断：缓存 8000 chars，显示窗口尾部 ~3000 chars，旧消息自动丢弃
+- 角色标记：每条消息前有 emoji（👤 人、🤖 main、🔍 trace、🔬 ida、⚙️ 系统）+ 类型 badge（📩 请求、❓ 问题、📋 结论、⚡ 决策）
+
 聊天窗口操作：
 - `Enter` 发送消息，`Shift+Enter` 换行
+- `PgUp`/`PgDn` 翻页滚动历史，`Home`/`End` 跳到最早/最新
 - `/quit` 退出整个 session，`/clear` 清屏
 - `Ctrl+C` / `Ctrl+D` 退出
+
+**已知限制：鼠标滚轮在 tmux 内无法滚动**
+
+tmux 的 `mouse on` 会拦截所有鼠标事件用于自身的窗口切换和 copy-mode 滚动，
+prompt_toolkit 的 `mouse_support=True` 无法在 tmux pane 内接收到鼠标滚轮事件。
+替代方案：使用 `PgUp`/`PgDn`/`Home`/`End` 键盘滚动。如果在 tmux 外运行
+（`--no-tmux` 或直接启动 chat_app），鼠标滚轮应该可用但未经充分测试。
 
 回退方式：
 - `duck run --no-tmux`：回退到旧 Textual TUI（与 `--local` 不同——仍多进程，只是用 Textual 代替 tmux）
