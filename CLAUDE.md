@@ -22,7 +22,7 @@
 
 ## 架构
 
-### 多进程模式（`duck launch`）
+### 多进程模式（`duck run`，默认）
 
 ```
 进程: bus-server (FastAPI + SQLite + WebSocket)     :8720
@@ -46,7 +46,7 @@ trace_agent (MCP client)
 Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调工具时才连。
 连不上不崩溃，返回 error 给 LLM，LLM 自行适应。
 
-### 单进程模式（`duck run`，向后兼容）
+### 单进程模式（`duck run --local`）
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -163,7 +163,7 @@ Tool dispatch 优先级：本地工具 > MCP 工具。
 
 ## TUI
 
-基于 Textual 框架，面板式布局。`duck run` 启动 TUI 模式，`duck log`/`duck send` 保留为纯命令行模式。
+基于 Textual 框架，面板式布局。`duck run` 一键全开（多进程默认），`duck run --local` 单进程调试，`duck log`/`duck send` 纯命令行模式。
 
 ```
 ┌─────────────────────────────────────────┬──────────────┐
@@ -348,26 +348,31 @@ prompts/                   # agent system prompts
 ## 使用方式
 
 ```bash
-# === 单进程模式（开发/测试） ===
+# === 默认模式（多进程，一键全开） ===
+
+# 一键启动全部进程（server + 3 agents + TUI），端口从 .env 读取
+uv run duck run
+
+# === 单进程模式（开发/调试） ===
 
 # 启动 TUI（agent 运行在同一进程）
-uv run duck run
+uv run duck run --local
 
 # 纯命令行
 uv run duck send "@trace_agent 分析签名"
 uv run duck log --from trace_agent --limit 10
 
-# === 多进程模式（生产） ===
+# === 手动分步启动（高级用法） ===
 
-# 一键启动全部进程（server + 3 agents + TUI）
-uv run duck launch --port 8720
+uv run duck server                            # 终端 1: 总线服务（端口从配置读）
+uv run duck agent main_agent                  # 终端 2
+uv run duck agent trace_agent                 # 终端 3
+uv run duck agent ida_jadx_agent              # 终端 4
+uv run duck run --connect http://127.0.0.1:8720  # 终端 5: 仅 TUI
 
-# 或手动分步启动：
-uv run duck server --port 8720              # 终端 1: 总线服务
-uv run duck agent main_agent --server-url http://127.0.0.1:8720   # 终端 2
-uv run duck agent trace_agent --server-url http://127.0.0.1:8720  # 终端 3
-uv run duck agent ida_jadx_agent --server-url http://127.0.0.1:8720  # 终端 4
-uv run duck run --transport http --server-url http://127.0.0.1:8720  # 终端 5: TUI
+# 端口/URL 均可覆盖：
+uv run duck run --port 9000                   # 指定端口
+uv run duck agent trace_agent --server-url http://other:9000
 
 # 直接用 curl 调试
 curl http://127.0.0.1:8720/api/v1/history
