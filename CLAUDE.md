@@ -39,8 +39,8 @@ tmux session: duckagent
 ```
 
 每个 agent 窗口分上下两个 pane：
-- **上 pane (80%)**：agent 进程的 stdout，用 rich 格式化成可读聊天日志
-- **下 pane (20%)**：`input_pane.py` — prompt_toolkit 输入，httpx POST 到 bus
+- **上 pane（剩余空间）**：agent 进程的 stdout，用 rich 格式化成可读聊天日志
+- **下 pane（1 行）**：`input_pane.py` — prompt_toolkit 输入，httpx POST 到 bus
 
 tmux 先启动（立即可见），然后 bus server 和 agent 进程启动。鼠标点击 status bar 切换窗口。
 
@@ -173,8 +173,6 @@ Tool dispatch 优先级：本地工具 > MCP 工具。
 # console.py — AgentConsole: rich 格式化 agent 输出
 console.print_received(msg)      # 📤 蓝色面板：收到消息
 console.print_response(msg)      # 📋 绿色面板：发送回复
-console.print_tool_call(name, args)  # 🔧 黄色面板：工具调用
-console.print_tool_result(name, result)  # ✅ 黄色面板：工具结果
 console.print_banner(url)        # 启动 banner
 ```
 
@@ -292,6 +290,7 @@ src/duckagent/
 │   ├── interface.py       # MessageBus ABC（8 个抽象方法）
 │   ├── models.py          # Message 数据模型（含 mentions）
 │   ├── store.py           # LocalMessageBus: SQLite + Queue 分发
+│   ├── _db.py              # Shared SQLite schema + row mapping
 │   └── http_client.py     # HttpMessageBus: HTTP POST + WebSocket 接收
 ├── server/
 │   ├── app.py             # FastAPI app + lifespan
@@ -313,12 +312,10 @@ src/duckagent/
 │       ├── file_server.py   # 内置 file MCP server (通用文件读写)
 │       └── jadx_server.py   # 内置 JADX MCP server wrapper (FastMCP)
 ├── tools/
-│   ├── protocol.py        # ToolExecutor protocol (legacy)
-│   ├── schemas.py         # trace + JADX tool schemas (legacy)
 │   ├── trace_executor.py  # LocalTraceToolExecutor (被 trace MCP server 复用)
 │   └── jadx_executor.py   # JadxToolExecutor (被 jadx MCP server 复用)
 ├── processes/
-│   ├── agent_process.py   # Agent 进程入口（工厂 + 信号处理）
+│   └── agent_process.py   # Agent 进程入口（工厂 + 信号处理）
 ├── tmux/
 │   ├── __init__.py        # 包导出（懒加载）
 │   ├── session.py         # TmuxSession: libtmux 会话管理 + 双窗格布局
@@ -327,11 +324,8 @@ src/duckagent/
 │   ├── local_app.py       # 单进程 prompt_toolkit chat（--local 模式）
 │   ├── bus_monitor.py     # 消息总线监控（win3，只读 observer）
 │   └── status_dashboard.py  # Agent 状态仪表盘（win4，只读 status subscriber）
-├── verify/
-│   ├── hard.py            # 硬校验
-│   └── self_check.py      # 模型自查
 ├── cli/
-│   ├── app.py             # typer CLI: run/log/send/server/launch/agent
+│   └── app.py             # typer CLI: run/log/send/server/launch/agent
 ├── launcher.py            # 多进程启动器（subprocess.Popen）
 └── config.py              # pydantic-settings 配置 + MCP 注册表
 tools/search/              # ak_search C 源码 + 编译产物

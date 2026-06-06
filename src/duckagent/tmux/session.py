@@ -38,9 +38,6 @@ _AGENT_WINDOW_NAMES = {
 _HEALTH_POLL_INTERVAL = 0.5
 _HEALTH_TIMEOUT = 15.0
 
-# Pane size ratio: agent stdout gets 80%, input gets 20%
-_AGENT_PANE_PCT = 80
-
 
 class TmuxSession:
     """Manages a DuckAgent tmux session with 5 windows.
@@ -217,15 +214,10 @@ class TmuxSession:
         # The active pane is the only pane — it will become the TOP pane
         top_pane = window.active_pane
 
-        # Resize top pane to ~80% height
-        top_pane.set_height(height=_AGENT_PANE_PCT)
-
-        # Split bottom pane for input (minimal height)
+        # Split bottom pane for input (only 1 row)
         bottom_pane = top_pane.split(attach=False)
-        try:
-            bottom_pane.set_height(height=3)
-        except Exception:
-            pass
+        # Set bottom to 1 row; tmux gives remaining space to top automatically
+        bottom_pane.set_height(height=1)
 
         # Start input process in bottom pane immediately
         # (it will retry connection until bus is ready, then show prompt)

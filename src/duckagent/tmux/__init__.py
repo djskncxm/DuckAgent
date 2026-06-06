@@ -14,7 +14,6 @@ Modules:
     local_app.py       — Single-process prompt_toolkit chat (--local mode)
     bus_monitor.py     — WebSocket observer (window 3)
     status_dashboard.py — WebSocket status subscriber (window 4)
-    chat_app.py        — ⚠️ Deprecated (was v1 combined display+input, replaced by two-pane)
 """
 
 # Lazy imports — import submodules directly to avoid
@@ -22,7 +21,6 @@ Modules:
 __all__ = [
     "AgentConsole",
     "BusMonitor",
-    "ChatApp",
     "StatusDashboard",
     "TmuxSession",
     "main_input",
@@ -34,9 +32,6 @@ def __getattr__(name: str):
     if name == "TmuxSession":
         from duckagent.tmux.session import TmuxSession
         return TmuxSession
-    if name == "ChatApp":
-        from duckagent.tmux.chat_app import ChatApp
-        return ChatApp
     if name == "BusMonitor":
         from duckagent.tmux.bus_monitor import BusMonitor
         return BusMonitor

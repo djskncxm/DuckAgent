@@ -22,7 +22,6 @@ import argparse
 import asyncio
 import atexit
 import os
-import re
 from pathlib import Path
 
 import httpx

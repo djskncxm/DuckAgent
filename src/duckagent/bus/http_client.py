@@ -38,7 +38,6 @@ _CONNECT_TIMEOUT = 10.0
 # Reconnect backoff parameters
 _RECONNECT_BASE_DELAY = 1.0  # seconds
 _RECONNECT_MAX_DELAY = 30.0  # seconds
-_RECONNECT_MAX_ATTEMPTS = 0  # 0 = unlimited
 
 
 class ConnectionError(Exception):

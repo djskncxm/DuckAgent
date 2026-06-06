@@ -14,17 +14,14 @@ from duckagent.mcp.client_manager import (
     BUILTIN_MCP_SERVERS,
     McpClientManager,
     McpServerConfig,
-    McpServerConnection,
     load_mcp_json,
 )
-from duckagent.mcp.schema_converter import mcp_tool_to_openai, mcp_tools_to_openai_format
+from duckagent.mcp.schema_converter import mcp_tools_to_openai_format
 
 __all__ = [
     "BUILTIN_MCP_SERVERS",
     "load_mcp_json",
     "McpClientManager",
     "McpServerConfig",
-    "McpServerConnection",
-    "mcp_tool_to_openai",
     "mcp_tools_to_openai_format",
 ]

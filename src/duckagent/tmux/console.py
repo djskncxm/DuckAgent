@@ -43,9 +43,6 @@ TYPE_BADGES: dict[str, str] = {
 
 _RX = "bright_blue"     # received message border
 _TX = "bright_green"    # sent/reply message border
-_TOOL = "bright_yellow"  # tool call border
-_ERR = "bright_red"     # error border
-_STATUS = "bright_magenta"  # status change
 _TS = "dim"             # timestamp style
 
 
@@ -138,53 +135,6 @@ class AgentConsole:
         self._console.print()
         self._console.print(Panel(md, title=title, border_style=_TX))
 
-    def print_send_error(self, to_agent: str | None, error: str) -> None:
-        """Print a publish failure notice."""
-        to_label = to_agent or "all"
-        body = f"❌ Send to **{to_label}** failed:\n```\n{error}\n```"
-        md = Markdown(body)
-        self._console.print()
-        self._console.print(Panel(md, title="⚠️ Send Error", border_style=_ERR))
-
-    # ── Tool calls ────────────────────────────────────────────────
-
-    def print_tool_call(self, tool_name: str, arguments: str) -> None:
-        """Print a tool call the agent is making."""
-        body = f"**{tool_name}**\n```json\n{arguments}\n```"
-        md = Markdown(body, code_theme="monokai")
-        self._console.print()
-        self._console.print(Panel(md, title="\U0001f527 tool call", border_style=_TOOL))
-
-    def print_tool_result(self, tool_name: str, result: str) -> None:
-        """Print a tool result."""
-        body = f"**{tool_name}** →\n```\n{result}\n```"
-        md = Markdown(body, code_theme="monokai")
-        self._console.print(Panel(md, title="✅ tool result", border_style=_TOOL))
-
-    # ── Status ────────────────────────────────────────────────────
-
-    def print_status(self, state: str, task_summary: str = "") -> None:
-        """Print agent state change."""
-        state_icon = {
-            "idle":          "⏸️",
-            "thinking":      "\U0001f9e0",
-            "tool_calling":  "\U0001f527",
-            "error":         "❌",
-        }.get(state, "ℹ️")
-
-        body = f"**{state_icon}  {state}**"
-        if task_summary:
-            body += f"\n{task_summary}"
-        md = Markdown(body)
-        self._console.print(Panel(md, title=f"{self.agent_id}", border_style=_STATUS))
-
-    # ── Generic / system ──────────────────────────────────────────
-
-    def print_system(self, text: str) -> None:
-        """Print a generic system-level message."""
-        md = Markdown(text)
-        self._console.print(Panel(md, title="⚙️ system", border_style="dim"))
-
     def print_banner(self, server_url: str) -> None:
         """Print a startup banner."""
         marker = AGENT_MARKERS.get(self.agent_id, FALLBACK_MARKER)
@@ -201,16 +151,3 @@ class AgentConsole:
         self._console.print()
 
 
-# ── Module-level convenience ────────────────────────────────────────
-
-# Shared singleton for callers that don't need per-agent config.
-# Prefer creating an AgentConsole instance in agent processes.
-_shared: AgentConsole | None = None
-
-
-def get_console(agent_id: str = "system") -> AgentConsole:
-    """Return a shared ``AgentConsole`` singleton."""
-    global _shared
-    if _shared is None:
-        _shared = AgentConsole(agent_id)
-    return _shared
