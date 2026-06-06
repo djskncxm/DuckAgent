@@ -309,8 +309,6 @@ class BaseAgent:
                 for tc in tool_calls:
                     name = tc.function.name
                     arguments = json.loads(tc.function.arguments)
-                    # Print tool call to stdout (visible in tmux pane)
-                    self._console.print_tool_call(name, tc.function.arguments)
                     # Local tools take priority over MCP
                     if name in LOCAL_TOOLS:
                         result = LOCAL_TOOLS[name](arguments)
@@ -318,8 +316,6 @@ class BaseAgent:
                         result = await mcp_manager.call_tool(name, arguments)
                     else:
                         result = f'{{"status": "error", "error": "Unknown tool: {name}"}}'
-                    # Print tool result to stdout
-                    self._console.print_tool_result(name, result)
                     local_tool_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,

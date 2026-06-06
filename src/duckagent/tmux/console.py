@@ -78,9 +78,9 @@ class AgentConsole:
         if width is None:
             try:
                 import os
-                width = min(os.get_terminal_size().columns, 100)
+                width = os.get_terminal_size().columns
             except (ValueError, OSError):
-                width = 80
+                width = None  # rich auto-detects
         self._width = width
         self._console = Console(
             width=width,
