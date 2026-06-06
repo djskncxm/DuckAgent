@@ -28,14 +28,29 @@ class Launcher:
         self,
         server_port: int = _DEFAULT_PORT,
         agents: list[str] | None = None,
+        use_tmux: bool = True,
     ) -> None:
         self._server_port = server_port
         self._agents = agents or _DEFAULT_AGENTS
+        self._use_tmux = use_tmux
         self._procs: list[tuple[str, subprocess.Popen[bytes]]] = []
 
     def start(self) -> None:
-        """Start all processes. Blocks on the TUI; tears down on exit."""
+        """Start all processes. Blocks on the TUI/tmux; tears down on exit."""
         server_url = f"http://127.0.0.1:{self._server_port}"
+
+        if self._use_tmux:
+            # tmux mode: tmux session goes up first, then server + agents
+            from duckagent.tmux.session import TmuxSession
+            tmux = TmuxSession(
+                server_url=server_url,
+                agents=self._agents,
+                server_port=self._server_port,
+            )
+            tmux.start()
+            return
+
+        # Legacy mode: subprocess TUI (no tmux)
         python = sys.executable
 
         # 1. Start bus server

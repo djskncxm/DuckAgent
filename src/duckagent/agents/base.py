@@ -170,8 +170,25 @@ class BaseAgent:
             return
         raise NotImplementedError
 
-    async def _broadcast_status(self, state: str, task_summary: str = "") -> None:
-        content = json.dumps({"state": state, "task_summary": task_summary}, ensure_ascii=False)
+    async def _broadcast_status(
+        self,
+        state: str,
+        task_summary: str = "",
+        tool_name: str = "",
+        tool_args_summary: str = "",
+        last_error: str = "",
+        last_api_latency: str = "",
+    ) -> None:
+        status_data: dict[str, str] = {"state": state, "task_summary": task_summary}
+        if tool_name:
+            status_data["tool_name"] = tool_name
+        if tool_args_summary:
+            status_data["tool_args_summary"] = tool_args_summary
+        if last_error:
+            status_data["last_error"] = last_error
+        if last_api_latency:
+            status_data["last_api_latency"] = last_api_latency
+        content = json.dumps(status_data, ensure_ascii=False)
         msg = Message(
             from_agent=self.agent_id,
             to_agent=None,
@@ -270,7 +287,17 @@ class BaseAgent:
                 return text
 
             if mcp_manager is not None or LOCAL_TOOLS:
-                await self._broadcast_status("tool_calling")
+                # Broadcast first tool being called for status dashboard
+                first_tc = tool_calls[0]
+                first_name = first_tc.function.name
+                first_args = first_tc.function.arguments
+                args_summary = first_args[:80] if len(first_args) > 80 else first_args
+                await self._broadcast_status(
+                    "tool_calling",
+                    task_summary=input_text[:80],
+                    tool_name=first_name,
+                    tool_args_summary=args_summary,
+                )
                 for tc in tool_calls:
                     name = tc.function.name
                     arguments = json.loads(tc.function.arguments)

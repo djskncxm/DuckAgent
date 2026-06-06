@@ -38,8 +38,9 @@ def run(
     local: bool = typer.Option(False, "--local", "-l", help="单进程模式（所有 agent 在同一进程）"),
     connect: str | None = typer.Option(None, "--connect", help="仅 TUI，连接到已有 bus server URL"),
     port: int | None = typer.Option(None, "--port", help=f"Bus server 端口（默认 {settings.bus_server_port}）"),
+    no_tmux: bool = typer.Option(False, "--no-tmux", help="不使用 tmux，回退到旧 Textual TUI"),
 ):
-    """启动 DuckAgent（默认多进程模式：server + agents + TUI）"""
+    """启动 DuckAgent（默认多进程模式：tmux + server + agents）"""
     if local:
         # 单进程本地模式
         from duckagent.cli.tui.app import DuckApp
@@ -53,10 +54,10 @@ def run(
         duck_app = DuckApp(bus=bus, http_mode=True)
         duck_app.run()
     else:
-        # 默认：多进程模式，启动 server + agents + TUI
+        # 默认：多进程模式，启动 server + agents + tmux（或旧 TUI）
         from duckagent.launcher import Launcher
         actual_port = port or settings.bus_server_port
-        launcher = Launcher(server_port=actual_port)
+        launcher = Launcher(server_port=actual_port, use_tmux=not no_tmux)
         launcher.start()
 
 
