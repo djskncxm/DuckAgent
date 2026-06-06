@@ -19,6 +19,23 @@ uv run duck run
 uv run duck run --local
 ```
 
+## 模型选择
+
+**推荐 DeepSeek**（`deepseek-chat` 或 `deepseek-reasoner`）。实测 DeepSeek 适配最好，其他模型（Claude、GPT 等）在中文 tool calling 场景下容易"抽风"。
+
+原因在于这套系统从 **prompt 到检测逻辑都是中文优先设计的**：
+
+1. **中停检测（mid-step detection）是中文特化的** — `base.py` 里的过渡短语全是中文（"让我先"、"接下来"、"我需要先"），DeepSeek 说中文最自然，命中后能被正确 nudge 去调工具。而 Claude/GPT 的中文表达模式不同，容易被反复拦截 → 死循环。
+
+2. **中文 instruction following** — system prompt、路由指令、工具描述大量使用中文。DeepSeek 的 RLHF 数据里中文比例远高于 OAI/Anthropic，中文多轮 tool calling 更稳定。
+
+3. **中英混合场景** — 逆向工程的代码/符号是英文，但分析和指令是中文。DeepSeek 在这类混合语境下的切换比纯英文原生模型流畅。
+
+如果要用其他模型，可以考虑：
+- 给 `_MID_STEP_INDICATORS` 加英文过渡短语（`"let me"`, `"I will"`, `"I need to"` 等）
+- 减少 nudge 次数（`max_continuations` 从 3 降到 1）
+- 但即使做了这些，中文场景下 DeepSeek 大概率还是体验最好的
+
 ## 架构
 
 ### 多进程模式（`duck run`，默认）
@@ -138,7 +155,7 @@ curl -X POST http://127.0.0.1:8720/api/v1/publish \
 通过 `.env` 文件（不提交到 git）：
 
 ```bash
-# === LLM ===
+# === LLM（推荐 DeepSeek，中文 tool calling 适配最好）===
 OPENAI_API_KEY=sk-xxx
 OPENAI_API_BASE=https://api.deepseek.com/v1
 DUCKAGENT_LITELLM_MODEL=openai/deepseek-chat
