@@ -8,6 +8,7 @@ import structlog
 
 from duckagent.bus import Message, MessageBus
 from duckagent.bus.models import parse_mentions
+from duckagent.tmux.console import AgentConsole
 
 logger = structlog.get_logger()
 
@@ -113,11 +114,15 @@ class BaseAgent:
         self._queue: asyncio.Queue[Message] | None = None
         self._task: asyncio.Task | None = None
         self._history: list[dict[str, Any]] = []
+        self._console = AgentConsole(agent_id)
 
     async def start(self) -> None:
         """Subscribe to the bus and start the message processing loop."""
         self._queue = self.bus.subscribe(self.agent_id)
         self._task = asyncio.create_task(self._loop())
+        # Print startup banner to stdout (visible in tmux pane)
+        server_url = getattr(self.bus, "server_url", "local")
+        self._console.print_banner(str(server_url))
         logger.info("agent_started", agent_id=self.agent_id)
 
     async def stop(self) -> None:
@@ -138,6 +143,9 @@ class BaseAgent:
             msg = await self._queue.get()
             if msg.type == "status":
                 continue
+            # Print received message to stdout (tmux pane display)
+            if msg.type in ("request", "question"):
+                self._console.print_received(msg)
             try:
                 await self.on_message(msg)
             except Exception as e:
@@ -301,6 +309,8 @@ class BaseAgent:
                 for tc in tool_calls:
                     name = tc.function.name
                     arguments = json.loads(tc.function.arguments)
+                    # Print tool call to stdout (visible in tmux pane)
+                    self._console.print_tool_call(name, tc.function.arguments)
                     # Local tools take priority over MCP
                     if name in LOCAL_TOOLS:
                         result = LOCAL_TOOLS[name](arguments)
@@ -308,6 +318,8 @@ class BaseAgent:
                         result = await mcp_manager.call_tool(name, arguments)
                     else:
                         result = f'{{"status": "error", "error": "Unknown tool: {name}"}}'
+                    # Print tool result to stdout
+                    self._console.print_tool_result(name, result)
                     local_tool_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -393,6 +405,9 @@ class BaseAgent:
             reply_to=reply_to,
         )
 
+        # Print to stdout (visible in tmux pane) — but not status
+        if type != "status":
+            self._console.print_response(msg)
         await self.bus.publish(msg)
 
 
@@ -424,14 +439,20 @@ class ToolAgent(BaseAgent):
         evidence = self._extract_evidence(response)
         reply_to = msg.from_agent if msg.from_agent != "human" else "human"
 
-        await self.send(
-            to=reply_to,
-            content=response,
+        reply_msg = Message(
+            from_agent=self.agent_id,
+            to_agent=reply_to,
             type="conclusion",
+            content=response,
             evidence=evidence if evidence else [self._default_evidence],
             confidence=self._assess_confidence(response),
             reply_to=msg.id,
         )
+
+        # Print response to stdout (visible in tmux pane)
+        self._console.print_response(reply_msg)
+
+        await self.bus.publish(reply_msg)
 
     @property
     def _default_evidence(self) -> str:

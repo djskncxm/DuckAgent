@@ -35,29 +35,25 @@ def format_message(msg: Message) -> str:
 
 @app.command()
 def run(
-    local: bool = typer.Option(False, "--local", "-l", help="单进程模式（所有 agent 在同一进程）"),
+    local: bool = typer.Option(False, "--local", "-l", help="单进程模式（prompt_toolkit chat + 所有 agent 同进程）"),
     connect: str | None = typer.Option(None, "--connect", help="仅 TUI，连接到已有 bus server URL"),
     port: int | None = typer.Option(None, "--port", help=f"Bus server 端口（默认 {settings.bus_server_port}）"),
-    no_tmux: bool = typer.Option(False, "--no-tmux", help="不使用 tmux，回退到旧 Textual TUI"),
 ):
     """启动 DuckAgent（默认多进程模式：tmux + server + agents）"""
     if local:
-        # 单进程本地模式
-        from duckagent.cli.tui.app import DuckApp
-        duck_app = DuckApp()
-        duck_app.run()
+        # 单进程本地模式：prompt_toolkit chat
+        from duckagent.tmux.local_app import run_local
+        asyncio.run(run_local())
     elif connect:
-        # TUI 仅连接模式：连接到已有 bus server
-        from duckagent.bus.http_client import HttpMessageBus
-        from duckagent.cli.tui.app import DuckApp
-        bus = HttpMessageBus(server_url=connect, agent_id=None)
-        duck_app = DuckApp(bus=bus, http_mode=True)
-        duck_app.run()
+        # 连接到已有 bus server（在新 terminal 中用 prompt_toolkit 聊天）
+        from duckagent.tmux.input_pane import run_input
+        # Default to main_agent window when connecting externally
+        asyncio.run(run_input("main_agent", connect))
     else:
-        # 默认：多进程模式，启动 server + agents + tmux（或旧 TUI）
+        # 默认：tmux 多进程模式
         from duckagent.launcher import Launcher
         actual_port = port or settings.bus_server_port
-        launcher = Launcher(server_port=actual_port, use_tmux=not no_tmux)
+        launcher = Launcher(server_port=actual_port, use_tmux=True)
         launcher.start()
 
 

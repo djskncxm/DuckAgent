@@ -4,7 +4,7 @@
 
 多 Agent 协作系统，用于 Android 逆向工程。Agent 平权——通过 @mention 互相点名，不设中心路由。
 
-当前阶段：Phase 4 — MCP 工具协议 + 配置驱动 + 惰性连接。
+当前阶段：Phase 4 — MCP 工具协议 + 配置驱动 + 惰性连接 + tmux 双窗格 TUI (v2)。
 
 ## 技术栈
 
@@ -16,7 +16,7 @@
 - Trace 工具：MCP stdio server → ak_search（C daemon，mmap + 行索引）
 - IDA 工具：MCP Streamable HTTP → IDA Pro MCP server（127.0.0.1:13337/mcp）
 - JADX 工具：MCP stdio → jadx-mcp-server（连接 JADX-GUI 8650 端口）
-- TUI：tmux + libtmux + prompt_toolkit（默认），Textual（`--local` 保留）
+- TUI：tmux + libtmux + prompt_toolkit（默认多进程），prompt_toolkit 单进程（`--local`）
 - 包管理：uv
 - CLI：typer
 - 下一阶段：Unidbg Agent、更完善的 prompt 和分析方法
@@ -31,14 +31,18 @@
 进程: trace-agent ──┼── HTTP POST /api/v1/publish + WS /ws?agent_id=<id>
 进程: ida-agent   ──┘
 tmux session: duckagent
-    ├─ Win0: main   (prompt_toolkit chat → main_agent)
-    ├─ Win1: trace  (prompt_toolkit chat → trace_agent)
-    ├─ Win2: ida    (prompt_toolkit chat → ida_jadx_agent)
+    ├─ Win0: main      二窗格：上(agent stdout) + 下(input)
+    ├─ Win1: trace     二窗格：上(agent stdout) + 下(input)
+    ├─ Win2: ida       二窗格：上(agent stdout) + 下(input)
     ├─ Win3: messages  (bus monitor — 所有消息流)
     └─ Win4: status    (agent 状态仪表盘)
 ```
 
-tmux 先启动（立即可见），然后 bus server 和 agent 进程启动，viewer 自动连接。鼠标点击 status bar 切换窗口。
+每个 agent 窗口分上下两个 pane：
+- **上 pane (80%)**：agent 进程的 stdout，用 rich 格式化成可读聊天日志
+- **下 pane (20%)**：`input_pane.py` — prompt_toolkit 输入，httpx POST 到 bus
+
+tmux 先启动（立即可见），然后 bus server 和 agent 进程启动。鼠标点击 status bar 切换窗口。
 
 ### MCP 工具连接（Agent 是纯客户端）
 
@@ -54,9 +58,9 @@ trace_agent (MCP client)
 Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调工具时才连。
 连不上不崩溃，返回 error 给 LLM，LLM 自行适应。
 
-### 单进程模式（`duck run --local`，Textual，开发/调试用）
+### 单进程模式（`duck run --local`，prompt_toolkit，开发/调试用）
 
-保留原有的 Textual 面板式 TUI，agent 在同一进程内通过 LocalMessageBus 通信。不需要 tmux。
+agent 在同一进程内通过 LocalMessageBus 通信，prompt_toolkit 单行输入。不需要 tmux 和 bus server。agent 输出通过 rich console 打印到终端。
 
 ### 角色
 
@@ -65,7 +69,7 @@ Agent 不管理 MCP server 生命周期。连接是惰性的——第一次调�
 | MainAgent | main_agent | 协调、拆解任务、综合结论 | file（内置） |
 | TraceAgent | trace_agent | 执行流分析、算法还原 | trace + file（内置 stdio） |
 | IdaJadxAgent | ida_jadx_agent | 静态分析、反汇编、反编译 | ida-pro-mcp + jadx-mcp + file |
-| 人（Leader） | human | 终审、路径决策 | tmux chat 窗口 / Textual TUI |
+| 人（Leader） | human | 终审、路径决策 | tmux input pane / --local prompt_toolkit |
 
 ### 未来角色
 
@@ -151,42 +155,38 @@ Tool dispatch 优先级：本地工具 > MCP 工具。
 
 ### tmux 模式（`duck run`，默认）
 
-基于 libtmux + prompt_toolkit。tmux 先启动（立即可见），然后 bus server 和 agent 进程启动连接。
+基于 libtmux + prompt_toolkit 的双窗格架构。tmux 先启动（立即可见），然后 bus server 和 agent 进程启动连接。
 
 5 个 tmux 窗口，鼠标点击 status bar 切换：
 
-| 窗口 | 名称 | 内容 |
-|------|------|------|
-| Win0 | main | main_agent 聊天（prompt_toolkit，底部输入 + 上方消息滚动） |
-| Win1 | trace | trace_agent 聊天 |
-| Win2 | ida | ida_jadx_agent 聊天 |
-| Win3 | messages | 消息总线监控（只读，所有非 status 消息） |
-| Win4 | status | Agent 状态仪表盘（idle/thinking/tool_calling + 任务 + 工具） |
+| 窗口 | 名称 | 上 pane | 下 pane |
+|------|------|---------|---------|
+| Win0 | main | main_agent 进程（rich 格式化 stdout） | input_pane（prompt_toolkit 输入） |
+| Win1 | trace | trace_agent 进程 | input_pane |
+| Win2 | ida | ida_jadx_agent 进程 | input_pane |
+| Win3 | messages | bus_monitor（WebSocket observer） | — |
+| Win4 | status | status_dashboard（WebSocket status） | — |
 
-每个 agent 窗口独立——在哪个窗口发的消息就路由给哪个 agent。窗口间互不干预。
+**双窗格设计核心**：agent 进程的 stdout 用 `AgentConsole`（rich Panel/Markdown）格式化成可读聊天日志，直接显示在上 pane。下 pane 的 `input_pane.py` 只负责接受输入并 HTTP POST 到 bus。不再需要独立的 chat viewer 进程——agent 自己就是 viewer。
 
-聊天窗口特性：
-- Markdown 渲染：rich 库 → ANSI → prompt_toolkit formatted text（`**bold**`、代码块、列表等）
-- 流式显示：每条消息到达即渲染追加，非批量刷新
-- 自动截断：缓存 8000 chars，显示窗口尾部 ~3000 chars，旧消息自动丢弃
-- 角色标记：每条消息前有 emoji（👤 人、🤖 main、🔍 trace、🔬 ida、⚙️ 系统）+ 类型 badge（📩 请求、❓ 问题、📋 结论、⚡ 决策）
+```python
+# console.py — AgentConsole: rich 格式化 agent 输出
+console.print_received(msg)      # 📤 蓝色面板：收到消息
+console.print_response(msg)      # 📋 绿色面板：发送回复
+console.print_tool_call(name, args)  # 🔧 黄色面板：工具调用
+console.print_tool_result(name, result)  # ✅ 黄色面板：工具结果
+console.print_banner(url)        # 启动 banner
+```
 
 聊天窗口操作：
-- `Enter` 发送消息，`Shift+Enter` 换行
-- `PgUp`/`PgDn` 翻页滚动历史，`Home`/`End` 跳到最早/最新
+- `Enter` 发送消息，`Alt+Enter` 换行
 - `/quit` 退出整个 session，`/clear` 清屏
-- `Ctrl+C` / `Ctrl+D` 退出
+- `Ctrl+C` / `Ctrl+D` 退出当前 pane
 
-**已知限制：鼠标滚轮在 tmux 内无法滚动**
-
-tmux 的 `mouse on` 会拦截所有鼠标事件用于自身的窗口切换和 copy-mode 滚动，
-prompt_toolkit 的 `mouse_support=True` 无法在 tmux pane 内接收到鼠标滚轮事件。
-替代方案：使用 `PgUp`/`PgDn`/`Home`/`End` 键盘滚动。如果在 tmux 外运行
-（`--no-tmux` 或直接启动 chat_app），鼠标滚轮应该可用但未经充分测试。
+**已知限制：鼠标滚轮在 tmux 内无法滚动** — tmux `mouse on` 拦截鼠标事件用于窗口切换和 copy-mode 滚动。用 tmux 内置的 copy-mode（`C-b [`）查看历史输出。
 
 回退方式：
-- `duck run --no-tmux`：回退到旧 Textual TUI（与 `--local` 不同——仍多进程，只是用 Textual 代替 tmux）
-- `duck run --local`：单进程 Textual 模式（开发/调试用）
+- `duck run --local`：单进程 prompt_toolkit 模式（所有 agent 在同一事件循环，LocalMessageBus）
 
 ## 通信机制
 
@@ -319,11 +319,12 @@ src/duckagent/
 │   └── jadx_executor.py   # JadxToolExecutor (被 jadx MCP server 复用)
 ├── processes/
 │   ├── agent_process.py   # Agent 进程入口（工厂 + 信号处理）
-│   └── tui_process.py     # TUI 进程入口（HttpMessageBus observer 模式，--no-tmux 使用）
 ├── tmux/
 │   ├── __init__.py        # 包导出（懒加载）
-│   ├── session.py         # TmuxSession: libtmux 会话管理 + 进程生命周期
-│   ├── chat_app.py        # prompt_toolkit Agent 聊天界面（win0-2）
+│   ├── session.py         # TmuxSession: libtmux 会话管理 + 双窗格布局
+│   ├── console.py         # AgentConsole: rich 格式化 agent stdout 输出
+│   ├── input_pane.py      # 独立 prompt_toolkit 输入进程（下 pane）
+│   ├── local_app.py       # 单进程 prompt_toolkit chat（--local 模式）
 │   ├── bus_monitor.py     # 消息总线监控（win3，只读 observer）
 │   └── status_dashboard.py  # Agent 状态仪表盘（win4，只读 status subscriber）
 ├── verify/
@@ -331,14 +332,6 @@ src/duckagent/
 │   └── self_check.py      # 模型自查
 ├── cli/
 │   ├── app.py             # typer CLI: run/log/send/server/launch/agent
-│   └── tui/
-│       ├── app.py         # DuckApp (Textual): local/http 双模式
-│       ├── app.tcss       # CSS 布局 + GitHub-dark 配色
-│       ├── worker.py      # Observer → UI
-│       └── widgets/
-│           ├── input_area.py   # 自适应输入框
-│           ├── message.py      # Markdown 消息渲染
-│           └── agent_card.py   # Agent 状态卡片
 ├── launcher.py            # 多进程启动器（subprocess.Popen）
 └── config.py              # pydantic-settings 配置 + MCP 注册表
 tools/search/              # ak_search C 源码 + 编译产物
@@ -352,13 +345,13 @@ prompts/                   # agent system prompts
 
 uv run duck run                              # 启动 tmux session + server + 3 agents
 
-# === 回退模式（无 tmux 环境） ===
-
-uv run duck run --no-tmux                    # 回退到旧 Textual TUI（仍多进程）
-
 # === 单进程模式（开发/调试） ===
 
-uv run duck run --local                      # Textual 单进程，agent 同进程运行
+uv run duck run --local                      # prompt_toolkit 单进程，agent 同进程运行
+
+# === 连接到已有 bus server ===
+
+uv run duck run --connect http://127.0.0.1:8720  # prompt_toolkit input 连接已有 bus
 
 # 纯命令行
 uv run duck send "@trace_agent 分析签名"
@@ -370,7 +363,6 @@ uv run duck server                            # 终端 1: 总线服务（端口�
 uv run duck agent main_agent                  # 终端 2
 uv run duck agent trace_agent                 # 终端 3
 uv run duck agent ida_jadx_agent              # 终端 4
-uv run duck run --no-tmux --connect http://127.0.0.1:8720  # 终端 5: 仅 TUI（Textual）
 
 # 端口/URL 均可覆盖：
 uv run duck run --port 9000                   # 指定端口
@@ -435,7 +427,7 @@ TraceAgent 通过 MCP tool calling 自主搜索这些文件，不需要手动切
 
 - 类型注解：所有函数签名必须有 type hints
 - 数据模型：Pydantic v2
-- 异步：agent 循环用 asyncio，TUI 用 Textual 的 asyncio 事件循环
+- 异步：agent 循环用 asyncio，TUI 用 prompt_toolkit asyncio 事件循环
 - 错误处理：不吞异常，该 raise 就 raise
 - 日志：structlog，默认 WARNING 级别
 - 配置：环境变量 + .env，不硬编码 key
