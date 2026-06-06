@@ -21,7 +21,7 @@ uv run duck run --local
 
 ## 模型选择
 
-**推荐 DeepSeek**（`deepseek-chat` 或 `deepseek-reasoner`）。实测 DeepSeek 适配最好，其他模型（Claude、GPT 等）在中文 tool calling 场景下容易"抽风"。
+**推荐 DeepSeek**（`deepseek-v4-pro`）。实测 DeepSeek 适配最好，其他模型（Claude、GPT 等）在中文 tool calling 场景下容易"抽风"。
 
 原因在于这套系统从 **prompt 到检测逻辑都是中文优先设计的**：
 
