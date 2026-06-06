@@ -439,9 +439,7 @@ class ChatApp:
             lines.append((conf_style, f"     [{msg.confidence} confidence]\n"))
 
         # ── Content (markdown → ANSI → formatted text) ────────────
-        content = msg.content[:800]
-        if len(msg.content) > 800:
-            content += "…"
+        content = msg.content
 
         try:
             from rich.console import Console

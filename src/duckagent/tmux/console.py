@@ -55,13 +55,6 @@ def _fmt_ts(ts: datetime | str) -> str:
     return str(ts)[:8]
 
 
-def _truncate(text: str, max_len: int = 500) -> str:
-    """Truncate text for panel display."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "…"
-
-
 # ── Public API ───────────────────────────────────────────────────────
 
 
@@ -116,7 +109,7 @@ class AgentConsole:
             mentions_text = " ".join(f"@{m}" for m in msg.mentions)
             title.append(f"  {mentions_text}", "dim")
 
-        body = _truncate(msg.content)
+        body = msg.content
         if msg.confidence and msg.confidence != "high":
             body = f"[{msg.confidence} confidence]\n{body}"
 
@@ -140,7 +133,7 @@ class AgentConsole:
             if badge:
                 title.append(f" {badge}")
 
-        body = _truncate(msg.content)
+        body = msg.content
         md = Markdown(body, code_theme="monokai")
         self._console.print()
         self._console.print(Panel(md, title=title, border_style=_TX))
@@ -157,16 +150,14 @@ class AgentConsole:
 
     def print_tool_call(self, tool_name: str, arguments: str) -> None:
         """Print a tool call the agent is making."""
-        args_summary = _truncate(arguments, 200)
-        body = f"**{tool_name}**\n```json\n{args_summary}\n```"
+        body = f"**{tool_name}**\n```json\n{arguments}\n```"
         md = Markdown(body, code_theme="monokai")
         self._console.print()
         self._console.print(Panel(md, title="\U0001f527 tool call", border_style=_TOOL))
 
     def print_tool_result(self, tool_name: str, result: str) -> None:
         """Print a tool result."""
-        result_summary = _truncate(result, 300)
-        body = f"**{tool_name}** →\n```\n{result_summary}\n```"
+        body = f"**{tool_name}** →\n```\n{result}\n```"
         md = Markdown(body, code_theme="monokai")
         self._console.print(Panel(md, title="✅ tool result", border_style=_TOOL))
 
@@ -183,7 +174,7 @@ class AgentConsole:
 
         body = f"**{state_icon}  {state}**"
         if task_summary:
-            body += f"\n{_truncate(task_summary, 200)}"
+            body += f"\n{task_summary}"
         md = Markdown(body)
         self._console.print(Panel(md, title=f"{self.agent_id}", border_style=_STATUS))
 
