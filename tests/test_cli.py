@@ -19,6 +19,21 @@ def test_cli_run_help():
     result = runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0
     assert "TUI" in result.stdout or "交互" in result.stdout
+    assert "--local" in result.stdout
+    assert "--connect" in result.stdout
+    assert "--port" in result.stdout
+
+
+def test_cli_server_help():
+    result = runner.invoke(app, ["server", "--help"])
+    assert result.exit_code == 0
+    assert "--port" in result.stdout
+
+
+def test_cli_agent_help():
+    result = runner.invoke(app, ["agent", "--help"])
+    assert result.exit_code == 0
+    assert "--server-url" in result.stdout
 
 
 def test_cli_log_help():

@@ -12,11 +12,11 @@ uv sync
 cp .env.example .env
 # 编辑 .env 填入 API key 和模型
 
-# 3. 启动（单进程，开箱即用）
+# 3. 启动（一键全开，端口默认从 .env 读取）
 uv run duck run
 
-# 4. 多进程模式
-uv run duck launch --port 8720
+# 4. 单进程调试模式
+uv run duck run --local
 ```
 
 ## 架构
@@ -32,7 +32,7 @@ uv run duck launch --port 8720
 │       ├── ida-jadx-agent 进程 (APK 静态分析)                │
 │       └── tui 进程 (Textual 终端界面)                       │
 │                                                             │
-│  也支持单进程模式 (duck run) —— 所有 agent 在同一 asyncio    │
+│  单进程模式 (duck run) —— 所有 agent 在同一 asyncio 进程内    │
 │  进程内通过 asyncio.Queue 通信，适合开发调试。               │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -62,13 +62,15 @@ trace_agent: "结论: HMAC-SHA256"          → human
 
 ```bash
 # ── TUI 交互 ──
-uv run duck run                         # 单进程 TUI
-uv run duck run --transport http        # 多进程 TUI（需先启动 server）
+uv run duck run                         # 一键启动（多进程，默认）
+uv run duck run --local                 # 单进程调试模式
+uv run duck run --connect http://127.0.0.1:8720  # 仅 TUI，连接已有 bus
 
 # ── 多进程管理 ──
-uv run duck launch --port 8720          # 一键启动全部进程
-uv run duck server --port 8720          # 仅启动消息总线
-uv run duck agent trace_agent --server-url http://127.0.0.1:8720
+uv run duck run                         # 一键启动全部进程
+uv run duck run --port 9000             # 指定端口
+uv run duck server                      # 仅启动消息总线
+uv run duck agent trace_agent           # 单个 Agent（URL 从配置读）
 
 # ── 命令行 ──
 uv run duck send "@trace_agent 分析签名算法"

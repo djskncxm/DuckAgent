@@ -35,21 +35,29 @@ def format_message(msg: Message) -> str:
 
 @app.command()
 def run(
-    transport: str = typer.Option("local", "--transport", help="Bus transport: local | http"),
-    server_url: str = typer.Option(None, "--server-url", help="Bus server URL (http mode)"),
+    local: bool = typer.Option(False, "--local", "-l", help="单进程模式（所有 agent 在同一进程）"),
+    connect: str | None = typer.Option(None, "--connect", help="仅 TUI，连接到已有 bus server URL"),
+    port: int | None = typer.Option(None, "--port", help=f"Bus server 端口（默认 {settings.bus_server_port}）"),
 ):
-    """启动 TUI 交互模式"""
-    if transport == "http":
-        url = server_url or settings.bus_server_url
-        from duckagent.bus.http_client import HttpMessageBus
-        from duckagent.cli.tui.app import DuckApp
-        bus = HttpMessageBus(server_url=url, agent_id=None)
-        duck_app = DuckApp(bus=bus, http_mode=True)
-        duck_app.run()
-    else:
+    """启动 DuckAgent（默认多进程模式：server + agents + TUI）"""
+    if local:
+        # 单进程本地模式
         from duckagent.cli.tui.app import DuckApp
         duck_app = DuckApp()
         duck_app.run()
+    elif connect:
+        # TUI 仅连接模式：连接到已有 bus server
+        from duckagent.bus.http_client import HttpMessageBus
+        from duckagent.cli.tui.app import DuckApp
+        bus = HttpMessageBus(server_url=connect, agent_id=None)
+        duck_app = DuckApp(bus=bus, http_mode=True)
+        duck_app.run()
+    else:
+        # 默认：多进程模式，启动 server + agents + TUI
+        from duckagent.launcher import Launcher
+        actual_port = port or settings.bus_server_port
+        launcher = Launcher(server_port=actual_port)
+        launcher.start()
 
 
 @app.command()
@@ -73,32 +81,24 @@ def send(message: str):
 
 @app.command()
 def server(
-    port: int = typer.Option(8720, "--port", help="Bus server port"),
+    port: int | None = typer.Option(None, "--port", help=f"Bus server 端口（默认 {settings.bus_server_port}）"),
 ):
     """启动 HTTP 消息总线服务"""
     import uvicorn
     from duckagent.server.app import app as bus_app
-    uvicorn.run(bus_app, host="127.0.0.1", port=port, log_level="info")
-
-
-@app.command()
-def launch(
-    port: int = typer.Option(8720, "--port", help="Bus server port"),
-):
-    """启动全部进程（server + agents + TUI）"""
-    from duckagent.launcher import Launcher
-    launcher = Launcher(server_port=port)
-    launcher.start()
+    actual_port = port or settings.bus_server_port
+    uvicorn.run(bus_app, host="127.0.0.1", port=actual_port, log_level="info")
 
 
 @app.command()
 def agent(
     agent_type: str = typer.Argument(..., help="Agent type: main_agent | trace_agent | ida_jadx_agent"),
-    server_url: str = typer.Option(..., "--server-url", help="Bus server URL"),
+    server_url: str | None = typer.Option(None, "--server-url", help=f"Bus server URL（默认 {settings.bus_server_url}）"),
 ):
     """启动单个 Agent 进程"""
     from duckagent.processes.agent_process import run_agent
-    asyncio.run(run_agent(agent_type, server_url))
+    actual_url = server_url or settings.bus_server_url
+    asyncio.run(run_agent(agent_type, actual_url))
 
 
 # ── Internals ──────────────────────────────────────────────────
